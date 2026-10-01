@@ -35,13 +35,16 @@ dev = [
     "ruff>=0.6",
 ]
 
+[project.scripts]
+usb-pasteur = "usb_pasteur.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/dbarzin/usb-pasteur"
 Issues = "https://github.com/dbarzin/usb-pasteur/issues"
 Security = "https://github.com/dbarzin/usb-pasteur/security/policy"
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/3D"]
+exclude = ["/3D", "/.github"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/usb_pasteur"]
@@ -66,7 +69,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]  # assert is expected in tests
+"tests/**" = ["S101", "S603", "S607"]  # asserts and test commands
 
 [tool.mypy]
 python_version = "3.12"
@@ -81,4 +84,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--strict-config"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not e2e"]
+markers = [
+    "e2e: end-to-end tests with a loop device (need root, see tests/e2e/run.sh)",
+]

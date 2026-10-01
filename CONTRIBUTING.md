@@ -47,14 +47,14 @@ python3 -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Use the `FAKE_SCAN` mode to work on the orchestrator and the interface without real detection engines or USB devices.
+Use the `FAKE_SCAN` mode (`fake_scan = true` in the configuration, or `--fake-scan`) to work on the orchestrator and the interface without real detection engines: only the EICAR test file is reported as malicious. Use `--interface console` to run without curses.
 
 ### Coding standards
 
 - Format and lint with `ruff`; check types with `mypy`. Public functions must have type hints.
 - Follow the existing structure and naming of the `usb_pasteur` package.
 - Treat every USB device and every file it contains as **hostile input**: validate paths, sizes and types, never execute or interpret content, and respect the configured limits.
-- Detection engines must implement the common plugin interface (`scan(file) -> Verdict`) and must not require network access at scan time.
+- Detection engines must implement the common interface (`usb_pasteur.engines.Engine`: `scan(path) -> EngineResult`) and must not require network access at scan time.
 - Do not add dependencies without discussing them first: each new package increases the attack surface of the image.
 - Keep log messages and scan reports structured (JSON) and free of secrets.
 
@@ -62,13 +62,14 @@ Use the `FAKE_SCAN` mode to work on the orchestrator and the interface without r
 
 ```sh
 ruff check .
-mypy .
+ruff format --check .
+mypy
 pytest
 ```
 
 - Unit tests are required for new code and bug fixes.
 - Detection tests must use harmless samples (EICAR, synthetic files). Do not commit real malware.
-- End-to-end tests run in a container with a simulated USB disk image (loop device).
+- End-to-end tests run in a privileged container with simulated USB disk images (loop devices, vfat/exfat/ext4). Run them with `tests/e2e/run.sh` (requires Docker and the `loop`, `vfat` and `exfat` kernel modules).
 
 ### Commit messages
 

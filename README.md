@@ -32,6 +32,8 @@ Goal: restart from a clean base while reusing what works in pandora-box.
 | Quarantine of infected files | Kept |
 | Curses interface (administrator mode) | Kept |
 | Logging, logrotate, systemd service | Kept, moved to structured JSON |
+| USB auto-mount mode | Removed (no automount on the kiosk) |
+| Image slideshow display (`fim`) | Removed, replaced by the kiosk interface in phase 3 |
 | Single-instance lock | Kept |
 | `pypandora` calls | Removed, replaced by the engine pipeline |
 | Comodo engine | Removed (no longer maintained on Linux) |
@@ -40,11 +42,43 @@ Goal: restart from a clean base while reusing what works in pandora-box.
 
 - [x] Project name: **USB-Pasteur** (repository `usb-pasteur`, Python module `usb_pasteur`)
 - [x] New repository, GPL-3.0 license, `CONTRIBUTING.md`, `SECURITY.md`
-- [ ] Python package structure (`pyproject.toml`), type hints, `ruff`, `mypy`
-- [ ] TOML configuration (replaces the `.ini`), validated at startup
-- [ ] Keep `FAKE_SCAN` mode for development
-- [ ] Continuous integration: lint, unit tests, package build
-- [ ] End-to-end tests in a container with a simulated USB disk image (loop device)
+- [x] Python package structure (`pyproject.toml`), type hints, `ruff`, `mypy`
+- [x] TOML configuration (replaces the `.ini`), validated at startup
+- [x] Keep `FAKE_SCAN` mode for development
+- [x] Continuous integration: lint, unit tests, package build
+- [x] End-to-end tests in a container with a simulated USB disk image (loop device)
+
+### Current status
+
+The pandora-box code has been ported to the `usb_pasteur` package (`src/usb_pasteur/`):
+
+| Module | Role |
+|---|---|
+| `cli.py` | Command line entry point (`usb-pasteur`) |
+| `config.py` | TOML configuration, validated at startup |
+| `statemachine.py`, `kiosk.py` | State machine and kiosk workflow |
+| `monitor.py` | USB detection with udev |
+| `device.py` | Hardened mounting (`ro,noexec,nosuid,nodev`, read-write only to clean) |
+| `scanner.py` | Parallel scan of the device files |
+| `engines/` | Engine interface and fake engine (`FAKE_SCAN`) |
+| `quarantine.py` | Copy of infected files with a manifest |
+| `ui/` | Curses (administrator) and console interfaces |
+| `logs.py`, `lock.py` | JSON logs, single-instance lock |
+
+Deployment files are in `packaging/`: example configuration, systemd service and logrotate.
+
+No real detection engine is available until phase 1: the kiosk refuses to start unless `FAKE_SCAN` mode is enabled.
+
+### Quick start (development)
+
+```sh
+pip install -e ".[dev]"
+cp packaging/usb-pasteur.toml usb-pasteur.toml   # then set fake_scan = true
+usb-pasteur --config usb-pasteur.toml --check-config
+sudo .venv/bin/usb-pasteur --config usb-pasteur.toml --interface console
+```
+
+In `FAKE_SCAN` mode, only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
 
 ## Phase 1 — Scanning engine (MVP)
 

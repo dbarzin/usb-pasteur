@@ -1,0 +1,49 @@
+# USB-Pasteur configuration
+# Installed as /etc/usb-pasteur/usb-pasteur.toml. Every key is optional:
+# the values below are the defaults. Unknown keys are rejected at startup.
+# Check this file with: usb-pasteur --check-config
+
+[kiosk]
+# Kiosk name written in every log entry (default: host name)
+# name = "kiosk-01"
+
+# FAKE_SCAN mode, for development only: no real detection is performed,
+# only the EICAR test file is reported as malicious.
+fake_scan = false
+
+# User interface: "curses" (full screen text) or "console" (plain text)
+interface = "curses"
+
+[device]
+# Folder where the USB device is mounted (must exist)
+mount_point = "/media/usb-pasteur"
+
+# Run mount/umount through "sudo -n" when the kiosk does not run as root
+use_sudo = false
+
+# Filesystems that may be mounted; any other device is rejected
+allowed_filesystems = ["vfat", "exfat", "ntfs", "ext4"]
+
+# Timeout of mount/umount commands, in seconds
+command_timeout = 60
+
+[scan]
+# Number of files scanned in parallel
+workers = 4
+
+# Files bigger than this size (in bytes) are skipped (default: 1 GiB)
+max_file_size = 1073741824
+
+# FAKE_SCAN mode only: simulated scan time per file, in seconds
+fake_delay = 0.0
+
+[quarantine]
+# Copy infected files to the kiosk before removing them from the device
+enabled = true
+folder = "/var/lib/usb-pasteur/quarantine"
+
+[logging]
+# JSON lines log file ("" disables logging)
+file = "/var/log/usb-pasteur/usb-pasteur.log"
+# DEBUG, INFO, WARNING or ERROR
+level = "INFO"

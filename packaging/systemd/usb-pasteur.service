@@ -1,0 +1,54 @@
+[Unit]
+Description=USB-Pasteur USB decontamination kiosk
+Documentation=https://github.com/dbarzin/usb-pasteur
+After=systemd-udevd.service local-fs.target
+# The kiosk owns the first console
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/usb-pasteur --check-config
+ExecStart=/usr/bin/usb-pasteur
+Restart=always
+RestartSec=2
+
+# Display the curses interface on tty1
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Environment=TERM=linux
+
+# Directories created by systemd
+StateDirectory=usb-pasteur
+StateDirectoryMode=0700
+LogsDirectory=usb-pasteur
+LogsDirectoryMode=0750
+
+# Hardening. Mounting devices requires CAP_SYS_ADMIN; the full sandbox
+# (dedicated users, bubblewrap per analyzer, seccomp) comes with phase 2.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/media/usb-pasteur
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target
