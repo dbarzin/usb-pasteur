@@ -3,6 +3,11 @@
 **USB-Pasteur** is an open source USB decontamination kiosk ("sheep-dip station") to detect and remove malware from USB storage devices.
 Successor to [pandora-box](https://github.com/dbarzin/pandora-box), with no dependency on Pandora (CIRCL).
 
+> [!WARNING]
+> **USB-Pasteur is under active development and is not usable yet.**
+> No real detection engine is integrated: the kiosk only runs in `FAKE_SCAN` mode, which detects nothing but the EICAR test file.
+> **Do not use it to check USB devices.** Until the first release, use [pandora-box](https://github.com/dbarzin/pandora-box) or another solution.
+
 ## Vision
 
 Provide a **free, auditable and hardened** USB decontamination kiosk, a credible alternative to commercial solutions, suited to sensitive environments (healthcare, industry, public administration).
