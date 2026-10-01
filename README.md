@@ -6,7 +6,7 @@ Successor to [pandora-box](https://github.com/dbarzin/pandora-box), with no depe
 > [!WARNING]
 > **USB-Pasteur is under active development and is not usable yet.**
 > No real detection engine is integrated: the kiosk only runs in `FAKE_SCAN` mode, which detects nothing but the EICAR test file.
-> **Do not use it to check USB devices.** Until the first release.
+> **Do not use it to check USB devices.** Until the first release, use a supported commercial or open source solution.
 
 ## Vision
 
