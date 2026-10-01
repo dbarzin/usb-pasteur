@@ -39,7 +39,7 @@ Goal: restart from a clean base while reusing what works in pandora-box.
 ### Tasks
 
 - [x] Project name: **USB-Pasteur** (repository `usb-pasteur`, Python module `usb_pasteur`)
-- [ ] New repository, GPL-3.0 license, `CONTRIBUTING.md`, `SECURITY.md`
+- [x] New repository, GPL-3.0 license, `CONTRIBUTING.md`, `SECURITY.md`
 - [ ] Python package structure (`pyproject.toml`), type hints, `ruff`, `mypy`
 - [ ] TOML configuration (replaces the `.ini`), validated at startup
 - [ ] Keep `FAKE_SCAN` mode for development
@@ -168,3 +168,11 @@ Tasks:
 ## Open questions
 
 - Default policy for a "suspicious" verdict: block or warn?
+
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, follow [SECURITY.md](SECURITY.md).
+
+## License
+
+USB-Pasteur is free software, licensed under the [GNU General Public License v3.0](LICENSE).

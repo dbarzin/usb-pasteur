@@ -1,0 +1,89 @@
+# Contributing to USB-Pasteur
+
+Thank you for your interest in USB-Pasteur! Contributions of all kinds are welcome: bug reports, documentation, detection engines, hardening improvements, translations, hardware validation and code.
+
+Please read this guide before opening an issue or a pull request.
+
+## Code of conduct
+
+Be respectful, constructive and patient. Harassment or discriminatory behavior will not be tolerated.
+
+## Reporting security issues
+
+**Do not open a public issue for a security vulnerability.** USB-Pasteur is a security product: please follow the process described in [SECURITY.md](SECURITY.md).
+
+## Reporting bugs and requesting features
+
+- Search the [existing issues](https://github.com/dbarzin/usb-pasteur/issues) first to avoid duplicates.
+- For a bug, include:
+  - the USB-Pasteur version or commit,
+  - the hardware (model, USB ports, display) or the development environment,
+  - the steps to reproduce, the expected result and the actual result,
+  - the relevant logs or scan report (remove any sensitive data first).
+- For a feature request, explain the use case and how it fits the [roadmap](README.md) and the guiding principles (minimal image, defense in depth, offline by default).
+
+**Never attach real malware samples to an issue.** Use the EICAR test file or share hashes (SHA-256) instead.
+
+## Development workflow
+
+1. Fork the repository and create a branch from `main`:
+   ```sh
+   git checkout -b feature/short-description
+   ```
+2. Make focused changes: one logical change per pull request.
+3. Add or update tests and documentation.
+4. Make sure linting, type checking and tests pass locally.
+5. Open a pull request against `main` describing **what** changes and **why**, and link the related issue.
+
+### Development environment
+
+USB-Pasteur targets **Python 3.12+**.
+
+```sh
+git clone https://github.com/<your-account>/usb-pasteur.git
+cd usb-pasteur
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Use the `FAKE_SCAN` mode to work on the orchestrator and the interface without real detection engines or USB devices.
+
+### Coding standards
+
+- Format and lint with `ruff`; check types with `mypy`. Public functions must have type hints.
+- Follow the existing structure and naming of the `usb_pasteur` package.
+- Treat every USB device and every file it contains as **hostile input**: validate paths, sizes and types, never execute or interpret content, and respect the configured limits.
+- Detection engines must implement the common plugin interface (`scan(file) -> Verdict`) and must not require network access at scan time.
+- Do not add dependencies without discussing them first: each new package increases the attack surface of the image.
+- Keep log messages and scan reports structured (JSON) and free of secrets.
+
+### Tests
+
+```sh
+ruff check .
+mypy .
+pytest
+```
+
+- Unit tests are required for new code and bug fixes.
+- Detection tests must use harmless samples (EICAR, synthetic files). Do not commit real malware.
+- End-to-end tests run in a container with a simulated USB disk image (loop device).
+
+### Commit messages
+
+- Write clear, imperative messages in English: `Add YARA-X engine`, `Fix mount options for exFAT`.
+- Keep the first line under 72 characters, add details in the body when useful.
+- Reference issues where relevant: `Fixes #42`.
+
+## Translations
+
+The kiosk interface targets FR, EN, DE and NL. Translation improvements and new languages are welcome; keep messages short so they fit on the 7-inch touchscreen.
+
+## Hardware contributions
+
+Reports on validated ThinkCentre models, touchscreens and enclosure improvements are valuable. Please include the exact model, firmware/BIOS version and what was tested.
+
+## License
+
+USB-Pasteur is licensed under the [GNU General Public License v3.0](LICENSE). By submitting a contribution, you agree that it will be distributed under the same license, and you confirm that you have the right to submit it.
