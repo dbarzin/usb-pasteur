@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "usb-pasteur"
+version = "0.1.0.dev0"
+description = "Open source USB decontamination kiosk to detect and remove malware from USB storage devices"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Didier Barzin" }]
+requires-python = ">=3.12"
+keywords = ["usb", "malware", "antivirus", "kiosk", "sheep-dip", "security"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pyudev>=0.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/dbarzin/usb-pasteur"
+Issues = "https://github.com/dbarzin/usb-pasteur/issues"
+Security = "https://github.com/dbarzin/usb-pasteur/security/policy"
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/3D"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/usb_pasteur"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "S",    # flake8-bandit (security)
+    "SIM",  # flake8-simplify
+    "PTH",  # prefer pathlib
+    "RUF",  # ruff-specific rules
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # assert is expected in tests
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["pyudev", "pyudev.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
