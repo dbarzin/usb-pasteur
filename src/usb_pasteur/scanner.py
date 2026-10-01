@@ -38,6 +38,10 @@ class ScanSummary:
     def infected(self) -> list[FileResult]:
         return [f for f in self.files if f.verdict is Verdict.MALICIOUS]
 
+    @property
+    def suspicious(self) -> list[FileResult]:
+        return [f for f in self.files if f.verdict is Verdict.SUSPICIOUS]
+
     def count(self, verdict: Verdict) -> int:
         return sum(1 for f in self.files if f.verdict is verdict)
 

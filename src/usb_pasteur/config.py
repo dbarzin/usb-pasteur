@@ -12,6 +12,7 @@ DEFAULT_CONFIG_PATH = Path("/etc/usb-pasteur/usb-pasteur.toml")
 
 INTERFACES = ("curses", "console")
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+SUSPICIOUS_POLICIES = ("block", "warn")
 SUPPORTED_FILESYSTEMS = ("vfat", "exfat", "ntfs", "ext4")
 
 
@@ -38,6 +39,9 @@ class DeviceConfig:
 class ScanConfig:
     workers: int = 4
     max_file_size: int = 1024**3
+    # "block": suspicious files are quarantined and removed like malicious ones
+    # "warn": they are only reported to the user
+    suspicious: str = "block"
     fake_delay: float = 0.0
 
 
@@ -112,7 +116,7 @@ def parse_config(data: dict[str, Any]) -> Config:
     )
 
     scan = data.get("scan", {})
-    _reject_unknown(scan, {"workers", "max_file_size", "fake_delay"}, "scan")
+    _reject_unknown(scan, {"workers", "max_file_size", "suspicious", "fake_delay"}, "scan")
     workers = _get(scan, "scan", "workers", int, 4)
     if not 1 <= workers <= 64:
         raise ConfigError("scan.workers must be between 1 and 64")
@@ -122,7 +126,12 @@ def parse_config(data: dict[str, Any]) -> Config:
     fake_delay = _number(scan, "scan", "fake_delay", 0.0)
     if fake_delay < 0:
         raise ConfigError("scan.fake_delay must not be negative")
-    scan_cfg = ScanConfig(workers=workers, max_file_size=max_file_size, fake_delay=fake_delay)
+    scan_cfg = ScanConfig(
+        workers=workers,
+        max_file_size=max_file_size,
+        suspicious=_choice(scan, "scan", "suspicious", SUSPICIOUS_POLICIES, "block"),
+        fake_delay=fake_delay,
+    )
 
     quarantine = data.get("quarantine", {})
     _reject_unknown(quarantine, {"enabled", "folder"}, "quarantine")

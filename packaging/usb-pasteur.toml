@@ -34,6 +34,11 @@ workers = 4
 # Files bigger than this size (in bytes) are skipped (default: 1 GiB)
 max_file_size = 1073741824
 
+# Files reported as suspicious by an engine:
+#   "block": quarantined and removed from the device, like malicious files
+#   "warn":  kept on the device, the user is warned
+suspicious = "block"
+
 # FAKE_SCAN mode only: simulated scan time per file, in seconds
 fake_delay = 0.0
 

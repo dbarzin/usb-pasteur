@@ -60,6 +60,8 @@ class Kiosk:
         )
         self.device: UsbDevice | None = None
         self.summary: ScanSummary | None = None
+        # Files to quarantine and remove, depending on the suspicious policy
+        self.to_remove: list[FileResult] = []
         self.machine = StateMachine(
             {
                 State.START: self.on_start,
@@ -154,11 +156,14 @@ class Kiosk:
         s = self.summary
         self.display.message(
             f"Scan done in {s.duration:.1f}s, {len(s.files)} files scanned, "
-            f"{len(s.infected)} files infected"
+            f"{len(s.infected)} files infected, {len(s.suspicious)} files suspicious"
         )
+        self.to_remove = s.infected
+        if self.config.scan.suspicious == "block":
+            self.to_remove = s.infected + s.suspicious
         if self.quarantine is not None:
             try:
-                self.quarantine.store(s.infected, root)
+                self.quarantine.store(self.to_remove, root)
             except OSError as ex:
                 log_event(logger, "quarantine_failed", logging.ERROR, error=str(ex))
         return State.CLEAN
@@ -166,18 +171,20 @@ class Kiosk:
     def on_clean(self) -> State:
         if self.summary is None:
             return State.WAIT
-        infected = self.summary.infected
+        infected = self.to_remove
+        if self.config.scan.suspicious == "warn" and self.summary.suspicious:
+            suspicious = self.summary.suspicious
+            log_event(logger, "suspicious_files", logging.WARNING, count=len(suspicious))
+            self._list(
+                f"WARNING: {len(suspicious)} suspicious files, use with caution:", suspicious
+            )
         if not infected:
             self._unmount()
             self.display.message("No infected file found. You can remove the device.")
             return State.WAIT
 
         log_event(logger, "infected_files", count=len(infected))
-        self.display.message(f"{len(infected)} infected files detected:")
-        for result in infected[:_MAX_LISTED]:
-            self.display.message(str(result.path.relative_to(self.mounter.mount_point)))
-        if len(infected) > _MAX_LISTED:
-            self.display.message("...")
+        self._list(f"{len(infected)} infected files detected:", infected)
         self.display.confirm("PRESS A KEY OR TOUCH THE SCREEN TO CLEAN")
 
         if not self.mounter.is_present():
@@ -206,6 +213,13 @@ class Kiosk:
         return State.WAIT
 
     # -- helpers -----------------------------------------------------------
+
+    def _list(self, title: str, results: list[FileResult]) -> None:
+        self.display.message(title)
+        for result in results[:_MAX_LISTED]:
+            self.display.message(str(result.path.relative_to(self.mounter.mount_point)))
+        if len(results) > _MAX_LISTED:
+            self.display.message("...")
 
     def _remove(self, path: Path) -> bool:
         root = self.mounter.mount_point

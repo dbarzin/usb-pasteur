@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import pytest
 
 from usb_pasteur.config import Config, parse_config
 from usb_pasteur.device import UsbDevice
+from usb_pasteur.engines import EngineResult, FakeEngine, Verdict
 from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines
 from usb_pasteur.monitor import Action, DeviceEvent
 
@@ -107,3 +109,60 @@ def test_fake_scan_banner(config: Config, display: RecordingDisplay, tmp_path: P
 def test_no_engine_without_fake_scan() -> None:
     with pytest.raises(NoEngineError):
         build_engines(parse_config({"kiosk": {"fake_scan": False}}))
+
+
+class SuspiciousEngine(FakeEngine):
+    """Fake engine that also reports files named *.suspect as suspicious."""
+
+    def scan(self, path: Path) -> EngineResult:
+        if path.suffix == ".suspect":
+            return EngineResult("suspicious", Verdict.SUSPICIOUS, "Heuristic")
+        return super().scan(path)
+
+
+def run_with_policy(policy: str, config: Config, display: RecordingDisplay, root: Path) -> None:
+    config = dataclasses.replace(config, scan=dataclasses.replace(config.scan, suspicious=policy))
+    source = ListSource([DeviceEvent(Action.ADD, DEVICE)])
+    Kiosk(config, display, source, [SuspiciousEngine()], DirectoryMounter(root)).run()
+
+
+def test_suspicious_block(
+    config: Config, display: RecordingDisplay, usb_tree: Path, tmp_path: Path
+) -> None:
+    (usb_tree / "macro.suspect").write_text("x")
+    run_with_policy("block", config, display, usb_tree)
+
+    assert not (usb_tree / "macro.suspect").exists()
+    assert not (usb_tree / "docs" / "eicar.com").exists()
+    assert "2 infected files detected:" in display.messages
+    manifest = next((tmp_path / "quarantine").glob("*/manifest.json"))
+    quarantined = {e["original_path"] for e in json.loads(manifest.read_text())}
+    assert quarantined == {"docs/eicar.com", "macro.suspect"}
+
+
+def test_suspicious_warn(
+    config: Config, display: RecordingDisplay, usb_tree: Path, tmp_path: Path
+) -> None:
+    (usb_tree / "macro.suspect").write_text("x")
+    run_with_policy("warn", config, display, usb_tree)
+
+    assert (usb_tree / "macro.suspect").exists()
+    assert not (usb_tree / "docs" / "eicar.com").exists()
+    assert "WARNING: 1 suspicious files, use with caution:" in display.messages
+    assert "macro.suspect" in display.messages
+    assert "1 infected files detected:" in display.messages
+    manifest = next((tmp_path / "quarantine").glob("*/manifest.json"))
+    quarantined = {e["original_path"] for e in json.loads(manifest.read_text())}
+    assert quarantined == {"docs/eicar.com"}
+
+
+def test_suspicious_warn_only(config: Config, display: RecordingDisplay, tmp_path: Path) -> None:
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "macro.suspect").write_text("x")
+    run_with_policy("warn", config, display, root)
+
+    assert (root / "macro.suspect").exists()
+    assert display.confirmations == 0
+    assert "WARNING: 1 suspicious files, use with caution:" in display.messages
+    assert "No infected file found. You can remove the device." in display.messages

@@ -15,6 +15,7 @@ def test_defaults() -> None:
     assert config.kiosk.interface == "curses"
     assert config.device.mount_point == Path("/media/usb-pasteur")
     assert config.scan.workers == 4
+    assert config.scan.suspicious == "block"
     assert config.quarantine.enabled is True
     assert config.logging.level == "INFO"
 
@@ -34,13 +35,14 @@ def test_full_config() -> None:
         {
             "kiosk": {"name": "kiosk-01", "fake_scan": True, "interface": "console"},
             "device": {"allowed_filesystems": ["vfat"], "use_sudo": True},
-            "scan": {"workers": 8, "max_file_size": 1000, "fake_delay": 1},
+            "scan": {"workers": 8, "max_file_size": 1000, "suspicious": "warn", "fake_delay": 1},
             "logging": {"file": "", "level": "DEBUG"},
         }
     )
     assert config.kiosk.name == "kiosk-01"
     assert config.device.allowed_filesystems == ("vfat",)
     assert config.scan.fake_delay == 1.0
+    assert config.scan.suspicious == "warn"
     assert config.logging.file is None
 
 
@@ -61,6 +63,7 @@ def test_full_config() -> None:
         ({"scan": {"workers": True}}, "must be of type int"),
         ({"scan": {"max_file_size": -1}}, "positive number of bytes"),
         ({"scan": {"fake_delay": -1}}, "must not be negative"),
+        ({"scan": {"suspicious": "ignore"}}, "scan.suspicious must be one of: block, warn"),
         ({"logging": {"level": "TRACE"}}, "logging.level must be one of"),
     ],
 )

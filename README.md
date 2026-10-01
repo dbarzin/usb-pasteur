@@ -92,7 +92,7 @@ Goal: replace Pandora with an equivalent or better local pipeline.
 - [ ] **YARA-X** + YARA Forge and signature-base rules
 - [ ] Real file type identification (`libmagic`)
 - [ ] Parallel engine execution (process pool), timeout per file and per engine
-- [ ] Verdict aggregation with a configurable policy (one positive engine is enough, etc.)
+- [ ] Verdict aggregation with a configurable policy (one positive engine is enough, etc.); suspicious policy (`block` / `warn`) already configurable
 - [ ] Limits: maximum file size, number of files, directory depth
 - [ ] JSON scan report (device, files, verdicts, engines, signature versions)
 - [ ] Test set: EICAR, harmless samples, known false positives
@@ -199,9 +199,9 @@ Tasks:
 - Smartphones and MTP devices
 - `.deb` package installable on an existing system: USB-Pasteur is only distributed as a complete hardened image
 
-## Open questions
+## Decisions
 
-- Default policy for a "suspicious" verdict: block or warn?
+- Policy for a "suspicious" verdict: configurable with `scan.suspicious`, `block` (default) or `warn`.
 
 ## Contributing
 
