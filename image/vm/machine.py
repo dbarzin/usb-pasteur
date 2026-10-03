@@ -8,7 +8,7 @@ kiosk screen) and a root shell on the virtio console (test profile only).
 
 Interactive use (see docs/image.md):
 
-    python3 machine.py run IMAGE [--workdir DIR]
+    python3 machine.py run [IMAGE] [--workdir DIR] [--usb VENDOR:PRODUCT|BUS-PORT]
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -35,6 +36,8 @@ OVMF_VARS = Path("/usr/share/OVMF/OVMF_VARS_4M.fd")
 KEY_SIZE = 64 * 1024 * 1024
 # Disk of the machine, bigger than the image: the data partition grows at boot
 DISK_SIZE = "8G"
+# VNC server address inside the container, which publishes it on localhost only
+VNC_LISTEN = "0.0.0.0"  # noqa: S104
 
 
 class MachineError(Exception):
@@ -61,7 +64,28 @@ def read_key(path: Path) -> list[str]:
         return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
 
 
-def qemu_argv(image: Path, workdir: Path, interactive: bool = False) -> list[str]:
+def usb_host_device(spec: str) -> list[str]:
+    """QEMU device passing a host USB device through: VENDOR:PRODUCT or BUS-PORT.
+
+    The device is attached when it is plugged into the host, and detached
+    from the host kernel driver.
+    """
+    if match := re.fullmatch(r"([0-9a-fA-F]{4}):([0-9a-fA-F]{4})", spec):
+        properties = f"vendorid=0x{match[1]},productid=0x{match[2]}"
+    elif match := re.fullmatch(r"(\d+)-(\d+(?:\.\d+)*)", spec):
+        properties = f"hostbus={match[1]},hostport={match[2]}"
+    else:
+        raise MachineError(f"not a USB device (VENDOR:PRODUCT) or port (BUS-PORT): {spec}")
+    return ["-device", f"usb-host,bus=xhci.0,{properties}"]
+
+
+def qemu_argv(
+    image: Path,
+    workdir: Path,
+    interactive: bool = False,
+    usb_host: Sequence[str] = (),
+    vnc_listen: str = VNC_LISTEN,
+) -> list[str]:
     kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
     argv = [
         "qemu-system-x86_64",
@@ -90,7 +114,7 @@ def qemu_argv(image: Path, workdir: Path, interactive: bool = False) -> list[str
             "-mon", "chardev=console",
             "-serial", f"file:{workdir / 'serial.log'}",
             "-vga", "std",
-            "-display", "vnc=0.0.0.0:0",
+            "-display", f"vnc={vnc_listen}:0",
         ]  # fmt: skip
     else:
         argv += [
@@ -100,6 +124,8 @@ def qemu_argv(image: Path, workdir: Path, interactive: bool = False) -> list[str
             "-vga", "std",
             "-display", "none",
         ]  # fmt: skip
+    for spec in usb_host:
+        argv += usb_host_device(spec)
     return argv
 
 
@@ -354,7 +380,10 @@ class Machine:
         self.monitor.execute("send-key", keys=[{"type": "qcode", "data": qcode}])
 
 
-def run_interactive(image: Path, workdir: Path) -> int:
+def run_interactive(
+    image: Path, workdir: Path, usb_host: Sequence[str] = (), vnc_listen: str = VNC_LISTEN
+) -> int:
+    argv = qemu_argv(image, workdir, True, usb_host, vnc_listen)
     prepare_workdir(image, workdir)
     key = workdir / "usbkey.img"
     make_key(key)
@@ -368,17 +397,34 @@ def run_interactive(image: Path, workdir: Path) -> int:
         f"Ctrl-A X stops the machine.\n",
         flush=True,
     )
-    return subprocess.run(qemu_argv(image, workdir, interactive=True), check=False).returncode
+    for spec in usb_host:
+        print(f"Host USB device {spec}: passed through to the machine when plugged in.")
+    return subprocess.run(argv, check=False).returncode
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="start the machine interactively")
-    run.add_argument("image", type=Path)
+    run.add_argument(
+        "image", type=Path, nargs="?", default=Path("image/mkosi.output/usb-pasteur-test.raw")
+    )
     run.add_argument("--workdir", type=Path, default=Path("image/vm/work"))
+    run.add_argument(
+        "--usb",
+        action="append",
+        default=[],
+        metavar="VENDOR:PRODUCT|BUS-PORT",
+        help="pass a host USB device through (see image/vm.sh usb)",
+    )
+    run.add_argument("--vnc-listen", default=VNC_LISTEN, help="address of the VNC server")
     args = parser.parse_args(argv)
-    return run_interactive(args.image.resolve(), args.workdir.resolve())
+    try:
+        return run_interactive(
+            args.image.resolve(), args.workdir.resolve(), args.usb, args.vnc_listen
+        )
+    except MachineError as ex:
+        parser.error(str(ex))
 
 
 if __name__ == "__main__":

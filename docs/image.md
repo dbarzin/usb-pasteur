@@ -145,6 +145,42 @@ Paths are seen from the container, where the repository is mounted on `/src`.
 Any disk image can be used as a key, but hostile samples should only ever be
 copied into key images, never onto the development desktop.
 
-A real USB device can be passed through to a QEMU started by hand, with
-`-device usb-host,bus=xhci.0,vendorid=0x....,productid=0x....`: the host must
-not mount it.
+### Real USB keys
+
+A USB key plugged into this computer can be passed through to the machine.
+List the USB storage devices of this computer, with their port (`BUS-PORT`)
+and identifier (`VENDOR:PRODUCT`):
+
+```sh
+image/vm.sh usb
+```
+```
+1-4  abcd:1234  General UDisk
+    sda     3,8G
+    └─sda1  3,7G vfat   /media/didier/6B20-F9DE
+```
+
+Then start the machine with `--usb`, followed by a port, which passes through
+any key plugged into that port, like the USB port of a kiosk, or by an
+identifier, which passes through that model of key on any port:
+
+```sh
+image/vm.sh run --usb 1-4
+```
+
+QEMU attaches the key to the machine as soon as it is plugged in (or at once
+if it is already there) and takes it from this computer: its kernel driver is
+detached. Before starting the machine, unmount the key
+(`udisksctl unmount -b /dev/sda1`) and disable the automatic mounting of USB
+devices of the desktop, so that this computer never mounts a key meant for
+the kiosk. `--usb` can be given several times. On GNOME:
+
+```sh
+gsettings set org.gnome.desktop.media-handling automount false
+gsettings set org.gnome.desktop.media-handling automount-open false
+# after the tests: the same commands with "true"
+```
+
+QEMU then runs as root in the container, with access to the USB devices of
+this computer and its network (to receive the udev events of the keys
+plugged in later); the kiosk screen is on `localhost:5900` as before.

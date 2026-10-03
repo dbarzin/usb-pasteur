@@ -64,6 +64,18 @@ def wait_event(
         time.sleep(1.0)
 
 
+def wait_screen(vm: Machine, text: str, timeout: float = 30.0) -> str:
+    """Wait until the kiosk screen (tty1) shows the text; return the screen."""
+    deadline = time.monotonic() + timeout
+    while True:
+        screen = vm.shell.run("kiosk-screen")
+        if text in screen:
+            return screen
+        if time.monotonic() > deadline:
+            raise TestFailure(f"not on the kiosk screen: {text}\n{screen}")
+        time.sleep(0.5)
+
+
 def last_report(vm: Machine) -> dict[str, Any]:
     path = vm.shell.run(f"ls -t {REPORTS}/*.json | head -n 1").strip()
     report: dict[str, Any] = json.loads(vm.shell.run(f"cat {path}"))
@@ -82,6 +94,7 @@ def check_boot(vm: Machine, timeout: float) -> None:
     )
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
     check(not failed, f"failed units:\n{failed}")
+    wait_screen(vm, "Ready. Insert a USB device.")
     print(f"kiosk started with engines {', '.join(engines)}")
 
 
@@ -123,11 +136,17 @@ def check_infected_key(vm: Machine, key: Path) -> None:
     check(infected["count"] == len(expected), f"infected files: {infected['count']}")
 
     step("confirm the cleaning on the kiosk screen")
+    # The screen must still show the scan while the kiosk waits for a key
+    time.sleep(1.0)
+    screen = wait_screen(vm, "PRESS A KEY OR TOUCH THE SCREEN TO CLEAN")
+    for path in expected:
+        check(path in screen, f"{path} not listed on the kiosk screen\n{screen}")
     # A key pressed before the kiosk waits for it may be discarded: press
     # again until the cleaning is done
     cleaned = wait_event(vm, "device_cleaned", action=vm.press_key, timeout=60)
     check(cleaned["removed"] == len(expected), f"removed files: {cleaned['removed']}")
     wait_event(vm, "device_ejected")
+    wait_screen(vm, "Device cleaned! You can remove the device.")
 
     step("check the report and the quarantine")
     report = last_report(vm)

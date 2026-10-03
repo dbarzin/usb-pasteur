@@ -47,6 +47,9 @@ class CursesDisplay:
             curses.init_pair(_RED, curses.COLOR_RED, curses.COLOR_BLACK)
             curses.init_pair(_BLUE, curses.COLOR_BLUE, curses.COLOR_BLACK)
             curses.init_pair(_GREEN, curses.COLOR_GREEN, curses.COLOR_BLACK)
+        # The interface is drawn in other windows; getch() refreshes the
+        # standard screen, which would then blank them unless already drawn
+        self.screen.refresh()
         self._layout()
 
     def stop(self) -> None:
