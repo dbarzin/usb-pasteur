@@ -55,7 +55,7 @@ Use the `FAKE_SCAN` mode (`fake_scan = true` in the configuration, or `--fake-sc
 - Format and lint with `ruff`; check types with `mypy`. Public functions must have type hints.
 - Follow the existing structure and naming of the `usb_pasteur` package.
 - Treat every USB device and every file it contains as **hostile input**: validate paths, sizes and types, never execute or interpret content, and respect the configured limits.
-- Detection engines must implement the common interface (`usb_pasteur.engines.Engine`: `scan(path) -> EngineResult`) and must not require network access at scan time.
+- Detection engines must implement the common interface (`usb_pasteur.engines.Engine`: `load()`, `version()`, `signature_info()` and `scan(file_info) -> EngineResult`), read files only through the descriptor given in `FileInfo`, keep no state between files, and must not require network access at scan time.
 - Do not add dependencies without discussing them first: each new package increases the attack surface of the image.
 - Keep log messages and scan reports structured (JSON) and free of secrets.
 

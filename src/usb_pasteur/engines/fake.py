@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import os
 import time
-from pathlib import Path
 
-from usb_pasteur.engines.base import EngineResult, Verdict
+from usb_pasteur.engines.base import Engine, EngineResult, FileInfo, Verdict
 
 # The EICAR test string is built at runtime so that this source file is not itself
 # detected by antivirus software (keep the explicit concatenation)
@@ -15,7 +14,7 @@ EICAR = _EICAR_HEAD + b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 _READ_SIZE = 4096
 
 
-class FakeEngine:
+class FakeEngine(Engine):
     """Reports the EICAR test file as malicious and every other file as clean.
 
     It performs no real detection: it only lets the kiosk workflow (scan,
@@ -27,12 +26,13 @@ class FakeEngine:
     def __init__(self, delay: float = 0.0) -> None:
         self.delay = delay
 
-    def scan(self, path: Path) -> EngineResult:
+    def version(self) -> str:
+        return "fake"
+
+    def scan(self, file: FileInfo) -> EngineResult:
         if self.delay:
             time.sleep(self.delay)
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "rb") as f:
-            head = f.read(_READ_SIZE)
+        head = os.pread(file.fd, _READ_SIZE, 0)
         if EICAR in head:
-            return EngineResult(self.name, Verdict.MALICIOUS, "EICAR-Test-File")
+            return EngineResult(self.name, Verdict.MALICIOUS, ("EICAR-Test-File",))
         return EngineResult(self.name, Verdict.CLEAN)

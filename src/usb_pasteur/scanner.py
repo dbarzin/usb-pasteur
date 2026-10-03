@@ -10,7 +10,8 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from usb_pasteur.engines import Engine, EngineResult, Verdict, aggregate
+from usb_pasteur.engines import Engine, EngineResult, FileInfo, Verdict, aggregate
+from usb_pasteur.hashing import hash_fd
 from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.text import human_size
 
@@ -27,6 +28,7 @@ class FileResult:
     results: tuple[EngineResult, ...] = ()
     detail: str = ""
     duration: float = 0.0
+    info: FileInfo | None = None
 
 
 @dataclass
@@ -82,7 +84,7 @@ class Scanner:
                 if size > self.max_file_size:
                     collect({_done(FileResult(path, size, Verdict.SKIPPED, detail="too big"))})
                     continue
-                pending.add(pool.submit(self.scan_file, path, size))
+                pending.add(pool.submit(self.scan_file, path, size, root))
                 if len(pending) >= max_pending:
                     done, pending = wait(pending, return_when=FIRST_COMPLETED)
                     collect(done)
@@ -103,20 +105,39 @@ class Scanner:
         )
         return summary
 
-    def scan_file(self, path: Path, size: int) -> FileResult:
+    def scan_file(self, path: Path, size: int, root: Path | None = None) -> FileResult:
         start = time.monotonic()
-        results: list[EngineResult] = []
-        for engine in self.engines:
-            try:
-                results.append(engine.scan(path))
-            except Exception as ex:  # an engine failure must not stop the scan
-                results.append(EngineResult(engine.name, Verdict.ERROR, str(ex)))
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except OSError as ex:
+            return FileResult(path, size, Verdict.ERROR, detail=f"cannot open: {ex.strerror}")
+        try:
+            hashes = hash_fd(fd)
+            info = FileInfo(
+                rel_path=str(path.relative_to(root)) if root else path.name,
+                size=hashes.size,
+                sha256=hashes.sha256,
+                sha1=hashes.sha1,
+                md5=hashes.md5,
+                fd=fd,
+            )
+            results: list[EngineResult] = []
+            for engine in self.engines:
+                try:
+                    results.append(engine.scan(info))
+                except Exception as ex:  # an engine failure must not stop the scan
+                    results.append(EngineResult(engine.name, Verdict.ERROR, error=str(ex)))
+        except OSError as ex:
+            return FileResult(path, size, Verdict.ERROR, detail=f"read error: {ex.strerror}")
+        finally:
+            os.close(fd)
         return FileResult(
             path=path,
             size=size,
             verdict=aggregate(results),
             results=tuple(results),
             duration=time.monotonic() - start,
+            info=info,
         )
 
     def _walk(self, root: Path) -> Iterator[tuple[Path, int]]:

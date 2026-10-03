@@ -8,7 +8,7 @@ import pytest
 
 from usb_pasteur.config import Config, parse_config
 from usb_pasteur.device import UsbDevice
-from usb_pasteur.engines import EngineResult, FakeEngine, Verdict
+from usb_pasteur.engines import EngineResult, FakeEngine, FileInfo, Verdict
 from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines
 from usb_pasteur.monitor import Action, DeviceEvent
 
@@ -114,10 +114,10 @@ def test_no_engine_without_fake_scan() -> None:
 class SuspiciousEngine(FakeEngine):
     """Fake engine that also reports files named *.suspect as suspicious."""
 
-    def scan(self, path: Path) -> EngineResult:
-        if path.suffix == ".suspect":
-            return EngineResult("suspicious", Verdict.SUSPICIOUS, "Heuristic")
-        return super().scan(path)
+    def scan(self, file: FileInfo) -> EngineResult:
+        if file.rel_path.endswith(".suspect"):
+            return EngineResult("suspicious", Verdict.SUSPICIOUS, ("Heuristic",))
+        return super().scan(file)
 
 
 def run_with_policy(policy: str, config: Config, display: RecordingDisplay, root: Path) -> None:

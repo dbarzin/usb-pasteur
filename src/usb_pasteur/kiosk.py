@@ -48,7 +48,7 @@ class Kiosk:
         self.config = config
         self.display = display
         self.source = source
-        self.scanner = Scanner(engines, config.scan.workers, config.scan.max_file_size)
+        self.scanner = Scanner(engines, config.scan.workers, config.limits.max_file_size)
         self.mounter = mounter or Mounter(
             config.device.mount_point,
             config.device.allowed_filesystems,

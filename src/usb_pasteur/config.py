@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import tomllib
 from dataclasses import dataclass, field, fields
@@ -13,8 +14,15 @@ DEFAULT_CONFIG_PATH = Path("/etc/usb-pasteur/usb-pasteur.toml")
 INTERFACES = ("curses", "console")
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 SUSPICIOUS_POLICIES = ("block", "warn")
+ERROR_POLICIES = ("block", "warn")
 SUPPORTED_FILESYSTEMS = ("vfat", "exfat", "ntfs", "ext4")
+CLAMD_MODES = ("auto", "fildes", "instream")
+COMPILE_ERROR_POLICIES = ("fail", "skip_rule")
 
+# Signatures and rules installed on the kiosk (updates come with phase 2)
+SIGNATURES_DIR = Path("/var/lib/usb-pasteur/signatures")
+
+_RULE_SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 T = TypeVar("T")
 
@@ -41,11 +49,101 @@ class DeviceConfig:
 @dataclass(frozen=True)
 class ScanConfig:
     workers: int = 4
-    max_file_size: int = 1024**3
+    # Maximum time to scan one file with all engines, in seconds
+    file_timeout: float = 300.0
     # "block": suspicious files are quarantined and removed like malicious ones
     # "warn": they are only reported to the user
     suspicious: str = "block"
+    # Files that could not be fully scanned (engine error, timeout, limit):
+    # "block": the device is reported as NOT VERIFIED and must not be used
+    # "warn": the user is warned and the files are listed
+    on_error: str = "block"
     fake_delay: float = 0.0
+
+
+@dataclass(frozen=True)
+class LimitsConfig:
+    max_file_size: int = 1024**3
+    max_files: int = 100_000
+    max_depth: int = 64
+
+
+@dataclass(frozen=True)
+class PolicyConfig:
+    # Number of engines that must report a file as malicious; with fewer
+    # positive engines, the file is only suspicious
+    min_malicious_engines: int = 1
+
+
+@dataclass(frozen=True)
+class ReportConfig:
+    folder: Path = Path("/var/lib/usb-pasteur/reports")
+
+
+@dataclass(frozen=True)
+class SignaturesConfig:
+    # Warn at startup when a signature database is older than this
+    max_age_days: float = 7.0
+
+
+@dataclass(frozen=True)
+class MalwareBazaarConfig:
+    enabled: bool = True
+    database: Path = SIGNATURES_DIR / "malwarebazaar" / "malwarebazaar.sha256.bin"
+    max_age_days: float | None = None
+
+
+@dataclass(frozen=True)
+class HashlookupConfig:
+    enabled: bool = True
+    bloom: Path = SIGNATURES_DIR / "hashlookup" / "hashlookup-full.bloom"
+    # Do not run the content engines (ClamAV, YARA) on known files
+    skip_content_engines: bool = True
+    # The CIRCL Bloom filter is updated monthly
+    max_age_days: float | None = 45.0
+
+
+@dataclass(frozen=True)
+class ClamavConfig:
+    enabled: bool = True
+    socket: Path = Path("/run/clamav/clamd.ctl")
+    mode: str = "auto"
+    timeout: float = 120.0
+    # Must not exceed MaxFileSize, MaxScanSize and StreamMaxLength of clamd.conf
+    max_file_size: int = 100 * 1024**2
+    suspicious_names: tuple[str, ...] = ("PUA.*", "Heuristics.*")
+    error_names: tuple[str, ...] = ("Heuristics.Limits.Exceeded.*",)
+    max_age_days: float | None = None
+
+
+@dataclass(frozen=True)
+class YaraRuleSet:
+    name: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class YaraConfig:
+    enabled: bool = True
+    rules: tuple[YaraRuleSet, ...] = (
+        YaraRuleSet("yara-forge", SIGNATURES_DIR / "yara" / "yara-forge" / "yara-rules-core.yar"),
+    )
+    cache_dir: Path | None = Path("/var/cache/usb-pasteur/yara")
+    timeout: float = 60.0
+    on_compile_error: str = "fail"
+    exclude: tuple[str, ...] = ()
+    malicious_score: int = 75
+    suspicious_score: int = 40
+    default_score: int = 60
+    max_age_days: float | None = None
+
+
+@dataclass(frozen=True)
+class EnginesConfig:
+    malwarebazaar: MalwareBazaarConfig = field(default_factory=MalwareBazaarConfig)
+    hashlookup: HashlookupConfig = field(default_factory=HashlookupConfig)
+    clamav: ClamavConfig = field(default_factory=ClamavConfig)
+    yara: YaraConfig = field(default_factory=YaraConfig)
 
 
 @dataclass(frozen=True)
@@ -65,6 +163,11 @@ class Config:
     kiosk: KioskConfig = field(default_factory=KioskConfig)
     device: DeviceConfig = field(default_factory=DeviceConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
+    limits: LimitsConfig = field(default_factory=LimitsConfig)
+    policy: PolicyConfig = field(default_factory=PolicyConfig)
+    engines: EnginesConfig = field(default_factory=EnginesConfig)
+    signatures: SignaturesConfig = field(default_factory=SignaturesConfig)
+    report: ReportConfig = field(default_factory=ReportConfig)
     quarantine: QuarantineConfig = field(default_factory=QuarantineConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
@@ -119,22 +222,48 @@ def parse_config(data: dict[str, Any]) -> Config:
     )
 
     scan = data.get("scan", {})
-    _reject_unknown(scan, {"workers", "max_file_size", "suspicious", "fake_delay"}, "scan")
+    if "max_file_size" in scan:
+        raise ConfigError("scan.max_file_size has moved to limits.max_file_size")
+    _reject_unknown(
+        scan, {"workers", "file_timeout", "suspicious", "on_error", "fake_delay"}, "scan"
+    )
     workers = _get(scan, "scan", "workers", int, 4)
     if not 1 <= workers <= 64:
         raise ConfigError("scan.workers must be between 1 and 64")
-    max_file_size = _get(scan, "scan", "max_file_size", int, 1024**3)
-    if max_file_size <= 0:
-        raise ConfigError("scan.max_file_size must be a positive number of bytes")
     fake_delay = _number(scan, "scan", "fake_delay", 0.0)
     if fake_delay < 0:
         raise ConfigError("scan.fake_delay must not be negative")
     scan_cfg = ScanConfig(
         workers=workers,
-        max_file_size=max_file_size,
+        file_timeout=_positive(scan, "scan", "file_timeout", ScanConfig.file_timeout),
         suspicious=_choice(scan, "scan", "suspicious", SUSPICIOUS_POLICIES, "block"),
+        on_error=_choice(scan, "scan", "on_error", ERROR_POLICIES, "block"),
         fake_delay=fake_delay,
     )
+
+    limits = data.get("limits", {})
+    _reject_unknown(limits, {"max_file_size", "max_files", "max_depth"}, "limits")
+    limits_cfg = LimitsConfig(
+        max_file_size=_positive_int(limits, "limits", "max_file_size", LimitsConfig.max_file_size),
+        max_files=_positive_int(limits, "limits", "max_files", LimitsConfig.max_files),
+        max_depth=_positive_int(limits, "limits", "max_depth", LimitsConfig.max_depth),
+    )
+
+    policy = data.get("policy", {})
+    _reject_unknown(policy, {"min_malicious_engines"}, "policy")
+    policy_cfg = PolicyConfig(
+        min_malicious_engines=_positive_int(policy, "policy", "min_malicious_engines", 1),
+    )
+
+    signatures = data.get("signatures", {})
+    _reject_unknown(signatures, {"max_age_days"}, "signatures")
+    signatures_cfg = SignaturesConfig(
+        max_age_days=_positive(signatures, "signatures", "max_age_days", 7.0),
+    )
+
+    report = data.get("report", {})
+    _reject_unknown(report, {"folder"}, "report")
+    report_cfg = ReportConfig(folder=_path(report, "report", "folder", ReportConfig.folder))
 
     quarantine = data.get("quarantine", {})
     _reject_unknown(quarantine, {"enabled", "folder"}, "quarantine")
@@ -157,9 +286,133 @@ def parse_config(data: dict[str, Any]) -> Config:
         kiosk=kiosk_cfg,
         device=device_cfg,
         scan=scan_cfg,
+        limits=limits_cfg,
+        policy=policy_cfg,
+        engines=_parse_engines(data.get("engines", {})),
+        signatures=signatures_cfg,
+        report=report_cfg,
         quarantine=quarantine_cfg,
         logging=logging_cfg,
     )
+
+
+def _parse_engines(engines: dict[str, Any]) -> EnginesConfig:
+    _reject_unknown(engines, {f.name for f in fields(EnginesConfig)}, "engines")
+    for name, value in engines.items():
+        if not isinstance(value, dict):
+            raise ConfigError(f"[engines.{name}] must be a table")
+
+    section = "engines.malwarebazaar"
+    mb = engines.get("malwarebazaar", {})
+    _reject_unknown(mb, {"enabled", "database", "max_age_days"}, section)
+    mb_cfg = MalwareBazaarConfig(
+        enabled=_get(mb, section, "enabled", bool, True),
+        database=_path(mb, section, "database", MalwareBazaarConfig.database),
+        max_age_days=_optional_positive(mb, section, "max_age_days", None),
+    )
+
+    section = "engines.hashlookup"
+    hl = engines.get("hashlookup", {})
+    _reject_unknown(hl, {"enabled", "bloom", "skip_content_engines", "max_age_days"}, section)
+    hl_cfg = HashlookupConfig(
+        enabled=_get(hl, section, "enabled", bool, True),
+        bloom=_path(hl, section, "bloom", HashlookupConfig.bloom),
+        skip_content_engines=_get(hl, section, "skip_content_engines", bool, True),
+        max_age_days=_optional_positive(hl, section, "max_age_days", HashlookupConfig.max_age_days),
+    )
+
+    section = "engines.clamav"
+    av = engines.get("clamav", {})
+    _reject_unknown(
+        av,
+        {
+            "enabled",
+            "socket",
+            "mode",
+            "timeout",
+            "max_file_size",
+            "suspicious_names",
+            "error_names",
+            "max_age_days",
+        },
+        section,
+    )
+    av_cfg = ClamavConfig(
+        enabled=_get(av, section, "enabled", bool, True),
+        socket=_path(av, section, "socket", ClamavConfig.socket),
+        mode=_choice(av, section, "mode", CLAMD_MODES, "auto"),
+        timeout=_positive(av, section, "timeout", ClamavConfig.timeout),
+        max_file_size=_positive_int(av, section, "max_file_size", ClamavConfig.max_file_size),
+        suspicious_names=tuple(
+            _get(av, section, "suspicious_names", list, list(ClamavConfig.suspicious_names))
+        ),
+        error_names=tuple(_get(av, section, "error_names", list, list(ClamavConfig.error_names))),
+        max_age_days=_optional_positive(av, section, "max_age_days", None),
+    )
+
+    section = "engines.yara"
+    yr = engines.get("yara", {})
+    _reject_unknown(
+        yr,
+        {
+            "enabled",
+            "rules",
+            "cache_dir",
+            "timeout",
+            "on_compile_error",
+            "exclude",
+            "malicious_score",
+            "suspicious_score",
+            "default_score",
+            "max_age_days",
+        },
+        section,
+    )
+    cache_dir: Path | None = _path(yr, section, "cache_dir", YaraConfig.cache_dir or Path())
+    if yr.get("cache_dir") == "":
+        cache_dir = None
+    yr_cfg = YaraConfig(
+        enabled=_get(yr, section, "enabled", bool, True),
+        rules=_rule_sets(yr, section),
+        cache_dir=cache_dir,
+        timeout=_positive(yr, section, "timeout", YaraConfig.timeout),
+        on_compile_error=_choice(yr, section, "on_compile_error", COMPILE_ERROR_POLICIES, "fail"),
+        exclude=tuple(_get(yr, section, "exclude", list, [])),
+        malicious_score=_score(yr, section, "malicious_score", YaraConfig.malicious_score),
+        suspicious_score=_score(yr, section, "suspicious_score", YaraConfig.suspicious_score),
+        default_score=_score(yr, section, "default_score", YaraConfig.default_score),
+        max_age_days=_optional_positive(yr, section, "max_age_days", None),
+    )
+    if yr_cfg.suspicious_score > yr_cfg.malicious_score:
+        raise ConfigError(f"{section}.suspicious_score must not exceed malicious_score")
+
+    return EnginesConfig(malwarebazaar=mb_cfg, hashlookup=hl_cfg, clamav=av_cfg, yara=yr_cfg)
+
+
+def _rule_sets(table: dict[str, Any], section: str) -> tuple[YaraRuleSet, ...]:
+    if "rules" not in table:
+        return YaraConfig.rules
+    value = table["rules"]
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{section}.rules must be a non-empty list of tables")
+    rule_sets: list[YaraRuleSet] = []
+    for index, item in enumerate(value):
+        where = f"{section}.rules[{index}]"
+        if not isinstance(item, dict):
+            raise ConfigError(f"{where} must be a table with name and path")
+        _reject_unknown(item, {"name", "path"}, where)
+        if "name" not in item or "path" not in item:
+            raise ConfigError(f"{where} needs a name and a path")
+        name = _get(item, where, "name", str, "")
+        if not _RULE_SET_NAME.match(name):
+            raise ConfigError(f"{where}.name must only contain letters, digits, '-' and '_'")
+        if name in {r.name for r in rule_sets}:
+            raise ConfigError(f"{section}.rules: duplicate name {name!r}")
+        path = _path(item, where, "path", Path())
+        if not item["path"]:
+            raise ConfigError(f"{where}.path must not be empty")
+        rule_sets.append(YaraRuleSet(name, path))
+    return tuple(rule_sets)
 
 
 def _reject_unknown(table: dict[str, Any], allowed: Any, section: str) -> None:
@@ -192,6 +445,28 @@ def _positive(table: dict[str, Any], section: str, key: str, default: float) -> 
     value = _number(table, section, key, default)
     if value <= 0:
         raise ConfigError(f"{section}.{key} must be positive")
+    return value
+
+
+def _optional_positive(
+    table: dict[str, Any], section: str, key: str, default: float | None
+) -> float | None:
+    if key not in table:
+        return default
+    return _positive(table, section, key, 1.0)
+
+
+def _positive_int(table: dict[str, Any], section: str, key: str, default: int) -> int:
+    value = _get(table, section, key, int, default)
+    if value <= 0:
+        raise ConfigError(f"{section}.{key} must be a positive integer")
+    return value
+
+
+def _score(table: dict[str, Any], section: str, key: str, default: int) -> int:
+    value = _get(table, section, key, int, default)
+    if not 0 <= value <= 100:
+        raise ConfigError(f"{section}.{key} must be between 0 and 100")
     return value
 
 
