@@ -7,8 +7,9 @@ container (`image/Dockerfile`: mkosi, QEMU, OVMF), so the developer only needs
 Docker.
 
 > [!WARNING]
-> The image is signed with development keys only, and the production image has no signatures yet
-> (the kiosk refuses to start until signature updates exist).
+> The image and the signature sets are signed with development keys only.
+> The production image has no signature set: the kiosk scans nothing until a
+> signature update device is inserted (see [signatures.md](signatures.md)).
 > See the phase 2 tasks in the [README](../README.md#phase-2--minimal-hardened-image).
 
 ## Layout
@@ -53,7 +54,7 @@ The disk image has five partitions:
 | root | EROFS, read-only | the whole system but `/var` (about 400 MB) |
 | root-verity | | dm-verity hash tree of the root filesystem |
 | root-verity-sig | | signature of the root hash |
-| data (`usb-pasteur-data`) | ext4, 1 GB in the image | `/var`: scan reports, quarantine, logs, signatures, clamd database |
+| data (`usb-pasteur-data`) | ext4, 1 GB in the image | `/var`: scan reports, quarantine, logs, signed signature sets (clamd reads its databases there) |
 
 The root filesystem is read-only by design (EROFS cannot be written at all):
 the system and its configuration only change with a new image. Everything
@@ -101,6 +102,12 @@ computer (ignored by git). A kiosk must only trust the release keys of the
 project, which are not defined yet: they will be kept out of the repository,
 and mkosi can sign with a key in a hardware token
 (`--secure-boot-key-source=provider:pkcs11`).
+
+The image also trusts the signature sets signed with `image/update.key`: its
+public key `image/update.pem` is installed in `/usr/share/usb-pasteur/keys/`
+(under dm-verity). `image/build.sh` generates a development pair when they
+do not exist; the test profile signs its signature set with it. See
+[signatures.md](signatures.md).
 
 On a kiosk, the certificate is enrolled in the firmware in place of the
 Microsoft keys (PK, KEK and db), so that it starts nothing else. The ESP
@@ -207,7 +214,8 @@ After a change of the dependencies in `pyproject.toml`, regenerate it with
 `--profile test` builds `usb-pasteur-test.raw`, for the virtual machine tests
 only, never for a kiosk:
 
-- test-only signatures, generated from `image/vm/corpus.py`: a ClamAV
+- a test-only signature set, generated from `image/vm/corpus.py`, signed
+  with the development update key and installed (serial 1): a ClamAV
   database that detects the EICAR test file, a MalwareBazaar database, a
   Hashlookup filter and a YARA rule, each detecting one file of the test key;
 - the matching configuration, with every engine enabled;
@@ -228,7 +236,8 @@ signing certificate is enrolled (Secure Boot enabled), and an empty USB 3
 controller. It plays the whole user workflow, through QMP and the shell on
 the virtio console:
 
-1. the kiosk starts with its four engines and no systemd unit fails;
+1. the kiosk starts with its four engines and the signature set 1, verified,
+   and no systemd unit fails;
 2. the four scan workers run in their sandbox (user, capabilities,
    `no_new_privs`, seccomp, network namespace, no device or kiosk data in
    their file system); Secure Boot is enabled, the kernel is locked down and
@@ -242,12 +251,15 @@ the virtio console:
    infected files are quarantined (checked against their SHA-256) and
    removed from the key, which is ejected;
 7. the key is removed: only the clean files are left on it;
-8. the cleaned key is inserted again and reported clean; an emulated USB
+8. the cleaned key is inserted again and reported clean; a signature update
+   key with a newer set (serial 2) is installed, the engines are reloaded and
+   the new sample it detects is found; a modified set, a set signed with
+   another key and an older set are refused; an emulated USB
    keyboard and network adapter are blocked by USBGuard (no input device, no
    network interface) and the excluded drivers are not in the image; the
    kernel settings, the firewall and the service sandboxes are in place;
-9. after a reboot, the scan reports are still there and the root filesystem
-   is unchanged.
+9. after a reboot, the scan reports are still there, the root filesystem is
+   unchanged and the signature set 2 is verified at start.
 
 Two more machines boot the same image:
 

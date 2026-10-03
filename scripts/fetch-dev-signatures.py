@@ -175,6 +175,9 @@ def main() -> int:
         print(f'cache_dir = "{dest / "cache"}"')
     else:
         print("enabled = false")
+    print("\n[signatures]")
+    print("# Development signatures are not a signed set (docs/signatures.md)")
+    print("verify = false")
     print("\n# ClamAV: install clamav-daemon and run freshclam, see docs/engines.md")
     return 0
 

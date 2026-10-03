@@ -24,9 +24,8 @@ def scan_user(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_wrap(scan_user: None) -> None:
-    sandbox = Sandbox(
-        "usb-pasteur-scan", (Path("/var/lib/usb-pasteur/signatures/yara"),), (Path("/cache"),)
-    )
+    yara = Path("/var/lib/usb-pasteur-signatures/current/yara")
+    sandbox = Sandbox("usb-pasteur-scan", (yara,), (Path("/cache"),))
     argv = sandbox.wrap(["python3", "-m", "usb_pasteur.worker", "3"])
     assert argv[0] == "bwrap"
     for option in ("--unshare-net", "--unshare-pid", "--unshare-ipc", "--die-with-parent"):
@@ -35,7 +34,7 @@ def test_wrap(scan_user: None) -> None:
     assert "--unshare-user" not in argv
     assert "--unshare-all" not in argv
     text = " ".join(argv)
-    assert "--ro-bind-try /var/lib/usb-pasteur/signatures/yara " in text
+    assert "--ro-bind-try /var/lib/usb-pasteur-signatures/current/yara " in text
     assert "--bind /cache /cache" in text
     assert "/media" not in text
     setpriv = argv.index("setpriv")

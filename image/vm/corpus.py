@@ -5,7 +5,7 @@ the test-only signatures that detect them (installed by the image test
 profile). Also a command line tool:
 
     python3 corpus.py key FOLDER         write the key files into FOLDER
-    python3 corpus.py signatures FOLDER  write the test signatures into FOLDER
+    python3 corpus.py signatures FOLDER  write the test signature set into FOLDER
     python3 corpus.py canary FILE        write the dm-verity canary file
 """
 
@@ -29,6 +29,8 @@ rule UsbPasteur_VM_Marker {{
 """
 MALWAREBAZAAR_SAMPLE = b"pretend malware sample listed in MalwareBazaar (VM test)\n"
 KNOWN_FILE = b"a well known file listed in hashlookup (VM test)\n"
+# Detected by MalwareBazaar only in the signature set of the update test
+NEW_SAMPLE = b"pretend malware sample listed by a signature update (VM test)\n"
 # File of the root filesystem of the test image, modified on the disk by the
 # dm-verity test. Its first line must be unique in the image; it fills whole
 # filesystem blocks, so that the modified block holds nothing else.
@@ -54,21 +56,29 @@ def write_key(folder: Path) -> None:
         target.write_bytes(content)
 
 
-def write_signatures(folder: Path) -> None:
-    """Write the signatures that detect the key files, and nothing else."""
+# Files of the test signature set (the default paths of the engines, but YARA)
+MALWAREBAZAAR_DB = "malwarebazaar/malwarebazaar.sha256.bin"
+HASHLOOKUP_BLOOM = "hashlookup/hashlookup-full.bloom"
+YARA_RULES = "yara/vm-test/rules.yar"
+CLAMAV_DB = "clamav/usb-pasteur-test.hdb"
+
+
+def write_signatures(folder: Path, malwarebazaar: tuple[bytes, ...] = ()) -> None:
+    """Write a signature set detecting the key files, and nothing else.
+
+    malwarebazaar: more samples to detect (signature update test).
+    """
     from usb_pasteur.bloom import write_filter
     from usb_pasteur.hashdb import write_database
 
-    folder.mkdir(parents=True, exist_ok=True)
-    write_database(
-        [hashlib.sha256(MALWAREBAZAAR_SAMPLE).digest()], folder / "malwarebazaar.sha256.bin"
-    )
-    write_filter(
-        folder / "hashlookup.bloom", [hashlib.sha1(KNOWN_FILE).hexdigest().upper().encode()]
-    )
-    (folder / "rules.yar").write_text(YARA_RULE)
+    for name in (MALWAREBAZAAR_DB, HASHLOOKUP_BLOOM, YARA_RULES, CLAMAV_DB):
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
+    samples = (MALWAREBAZAAR_SAMPLE, *malwarebazaar)
+    write_database([hashlib.sha256(s).digest() for s in samples], folder / MALWAREBAZAAR_DB)
+    write_filter(folder / HASHLOOKUP_BLOOM, [hashlib.sha1(KNOWN_FILE).hexdigest().upper().encode()])
+    (folder / YARA_RULES).write_text(YARA_RULE)
     sample = eicar()
-    (folder / "usb-pasteur-test.hdb").write_text(
+    (folder / CLAMAV_DB).write_text(
         f"{hashlib.md5(sample).hexdigest()}:{len(sample)}:UsbPasteur.Test.EICAR\n"
     )
 

@@ -66,6 +66,7 @@ The pandora-box code has been ported to the `usb_pasteur` package (`src/usb_past
 | `device.py` | Hardened mounting (`ro,noexec,nosuid,nodev`, read-write only to clean) |
 | `inventory.py` | Device inventory: never follows links, never leaves the device, limits |
 | `scanner.py`, `workers.py`, `worker.py` | Scan in supervised worker processes, timeouts and watchdog |
+| `sigsets.py` | Signed signature sets: verification, installation, `usb-pasteur-signatures` command |
 | `sandbox.py`, `seccomp.py`, `protocol.py` | Worker sandbox (bubblewrap, dedicated user, system call filter), validated JSON messages from the workers |
 | `pipeline.py`, `hashing.py`, `filetype.py` | Per file: hashes (SHA-256, SHA-1, MD5), libmagic type, engines |
 | `engines/` | Engine interface, MalwareBazaar, Hashlookup, ClamAV, YARA-X and fake engine |
@@ -123,8 +124,8 @@ uv pip install -e ".[dev]"
 cp packaging/usb-pasteur.toml usb-pasteur.toml
 # development helper: YARA rules, MalwareBazaar (needs ABUSECH_AUTH_KEY), Hashlookup
 python scripts/fetch-dev-signatures.py --dest dev-signatures
-# copy the printed [engines.*] settings into usb-pasteur.toml, set the
-# quarantine, report and log folders, then check the configuration
+# copy the printed [engines.*] and [signatures] settings into usb-pasteur.toml,
+# set the quarantine, report and log folders, then check the configuration
 usb-pasteur --config usb-pasteur.toml --check-config
 sudo .venv/bin/usb-pasteur --config usb-pasteur.toml --interface console
 ```
@@ -136,6 +137,8 @@ Mounting a device requires root: adding your user to a group (such as `disk`) is
 The device is unmounted while the kiosk asks the user to confirm the cleaning, so that it can be removed safely. To clean, it is mounted again read-write; a file is only removed if its SHA-256 is still the one that was scanned (another device may have been inserted in the meantime). When the scan and the cleaning are over, the device is ejected (`device.eject`, with `eject`, or `udisksctl power-off` in auto-mount mode).
 
 The scan workers run in a sandbox by default (`scan.sandbox`): it needs root, `bwrap` (Debian package `bubblewrap`), `setpriv` and a `usb-pasteur-scan` user (`sudo systemd-sysusers packaging/sysusers/usb-pasteur.conf`). For development without them, set `sandbox = false` in `[scan]`.
+
+The kiosk only uses a signed signature set (`signatures.verify`, see [docs/signatures.md](docs/signatures.md)): development signatures are not signed, set `verify = false` in `[signatures]` to use them.
 
 To work on the workflow without signatures, set `fake_scan = true` in `[kiosk]` (or use `--fake-scan`): only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
 
@@ -176,7 +179,7 @@ Goal: ship a ready-to-flash system image with the smallest possible attack surfa
 
 ### Current status
 
-A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox) and the scan workers run in a sandbox (bubblewrap, dedicated user, system call filter); the production image has no signatures yet. See [docs/image.md](docs/image.md):
+A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox) and the scan workers run in a sandbox (bubblewrap, dedicated user, system call filter). The kiosk only uses a signed signature set, verified at each start; without one, it scans nothing and waits for a signature update device. See [docs/image.md](docs/image.md):
 
 ```sh
 image/build.sh --profile test   # build the test image (Docker only)
@@ -231,9 +234,13 @@ Tasks:
 
 ### Signature updates
 
+See [docs/signatures.md](docs/signatures.md).
+
+- [x] Signed signature sets (Ed25519, verified with `openssl`): no rollback, atomic installation, previous set kept
+- [x] Signature verification before loading databases: the installed set is verified at each start, the engines (and clamd) only read it
+- [x] Offline updates from a signed USB device, for air-gapped kiosks
+- [ ] Publication: a service building signed sets from the sources (ClamAV, YARA Forge, MalwareBazaar, Hashlookup), and the release signing key
 - [ ] Online updates through a dedicated channel (proxy, domain allowlist)
-- [ ] Offline updates from a signed USB device, for air-gapped kiosks
-- [ ] Signature verification before loading databases
 
 ### Testing in a virtual machine
 

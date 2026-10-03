@@ -40,11 +40,16 @@ def test_invalid_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
 def test_refuses_to_start_without_engine_data(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Every engine is enabled by default: without signatures, the kiosk refuses to start
-    path = write(tmp_path, NO_SANDBOX)
+    # Every engine is enabled by default: without a signature set, or without
+    # engine data, the configuration is refused
+    folder = tmp_path / "signatures"
+    path = write(tmp_path, NO_SANDBOX + f'[signatures]\nfolder = "{folder}"\n')
+    assert main(["--config", str(path), "--check-config"]) == 2
+    assert f"signatures: no signature set installed in {folder}" in capsys.readouterr().err
+    assert main(["--config", str(path), "--check-config", "--fake-scan"]) == 0
+    path = write(tmp_path, NO_SANDBOX + "[signatures]\nverify = false\n")
     assert main(["--config", str(path), "--check-config"]) == 2
     assert "cannot load an enabled engine: malwarebazaar" in capsys.readouterr().err
-    assert main(["--config", str(path), "--check-config", "--fake-scan"]) == 0
 
 
 def test_refuses_to_start_without_content_engine(

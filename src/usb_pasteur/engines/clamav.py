@@ -22,7 +22,6 @@ from usb_pasteur.engines.base import (
     SignatureInfo,
     Verdict,
 )
-from usb_pasteur.signatures import verify_signatures
 
 MODES = ("auto", "fildes", "instream")
 
@@ -50,8 +49,7 @@ class ClamavEngine(Engine):
         self._version: ClamdVersion | None = None
 
     def load(self) -> None:
-        # clamd loads its own databases: their verification belongs to phase 2
-        verify_signatures(self.name, [])
+        # clamd loads its own databases, from the signed signature set
         try:
             self.client.ping()
             self._version = self.client.version()

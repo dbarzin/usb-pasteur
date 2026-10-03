@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 from usb_pasteur.config import Config
 from usb_pasteur.device import DeviceError, Mounter, SystemMountWatcher, UsbDevice
-from usb_pasteur.engines import Engine
+from usb_pasteur.engines import Engine, EngineError
 from usb_pasteur.engines.registry import NoEngineError, engine_specs, load_engines
 from usb_pasteur.hashing import hash_fd
 from usb_pasteur.logs import get_logger, log_event
@@ -27,6 +29,17 @@ from usb_pasteur.report import (
 from usb_pasteur.sandbox import Sandbox
 from usb_pasteur.scanner import FileResult, Scanner, ScanSummary, describe, pipeline_options
 from usb_pasteur.signatures import find_stale
+from usb_pasteur.sigsets import (
+    UPDATE_FOLDER,
+    Manifest,
+    NotNewerError,
+    SignatureSetError,
+    current_path,
+    install,
+    installed_manifest,
+    trusted_keys,
+    verify_installed,
+)
 from usb_pasteur.statemachine import State, StateMachine
 from usb_pasteur.text import escape
 from usb_pasteur.ui import Display
@@ -38,7 +51,18 @@ logger = get_logger("kiosk")
 _MAX_LISTED = 10
 
 
-__all__ = ["Kiosk", "NoEngineError", "build_engines", "build_pool", "stale_signatures"]
+__all__ = [
+    "Kiosk",
+    "NoEngineError",
+    "build_engines",
+    "build_pool",
+    "check_signatures",
+    "stale_signatures",
+]
+
+# Absolute path: commands are never looked up in PATH
+SYSTEMCTL = "/usr/bin/systemctl"
+CLAMD_SERVICE = "clamav-daemon.service"
 
 
 def build_engines(config: Config) -> list[Engine]:
@@ -68,23 +92,74 @@ def build_pool(config: Config) -> WorkerPool:
     )
 
 
+def signature_files(config: Config) -> list[Path]:
+    """The signature files and folders read by the enabled engines.
+
+    clamd reads its own databases (its DatabaseDirectory, in the image the
+    clamav folder of the signature set).
+    """
+    engines = config.engines
+    files: list[Path] = []
+    if engines.malwarebazaar.enabled:
+        files.append(engines.malwarebazaar.database)
+    if engines.hashlookup.enabled:
+        files.append(engines.hashlookup.bloom)
+    if engines.yara.enabled:
+        files += [rule_set.path for rule_set in engines.yara.rules]
+    return files
+
+
+def check_signatures(config: Config) -> Manifest | None:
+    """Verify the installed signature set and that the engines only read it.
+
+    Raise SignatureSetError when the set is missing, not signed by a trusted
+    key, modified, or when an engine file is not part of it. Nothing is
+    checked in FAKE_SCAN mode or without signatures.verify.
+    """
+    if config.kiosk.fake_scan or not config.signatures.verify:
+        return None
+    folder = config.signatures.folder
+    manifest = verify_installed(folder, trusted_keys(config.signatures.keys))
+    current = current_path(folder)
+    for path in signature_files(config):
+        try:
+            rel = path.relative_to(current).as_posix()
+        except ValueError:
+            raise SignatureSetError(f"{path} is not in the signature set ({current})") from None
+        if not any(f.path == rel or f.path.startswith(rel + "/") for f in manifest.files):
+            raise SignatureSetError(f"{path} is not in the signature set ({current})")
+    return manifest
+
+
+def restart_clamd() -> None:
+    """Restart clamd, which reads its databases at start, if it runs.
+
+    Not running, it is started with the new databases by its socket.
+    """
+    if not Path("/run/systemd/system").is_dir() or not Path(SYSTEMCTL).exists():
+        return
+    try:
+        subprocess.run(  # noqa: S603  (fixed command, no shell)
+            [SYSTEMCTL, "try-restart", CLAMD_SERVICE],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as ex:
+        log_event(logger, "clamd_restart_failed", logging.ERROR, error=str(ex))
+
+
 def build_sandbox(config: Config) -> Sandbox | None:
     """The sandbox of the scan workers: the files of the enabled engines only."""
     if not config.scan.sandbox:
         return None
     engines = config.engines
-    files: list[Path] = []
+    files = signature_files(config)
     writable: list[Path] = []
-    if engines.malwarebazaar.enabled:
-        files.append(engines.malwarebazaar.database)
-    if engines.hashlookup.enabled:
-        files.append(engines.hashlookup.bloom)
     if engines.clamav.enabled:
         files.append(engines.clamav.socket)
-    if engines.yara.enabled:
-        files += [rule_set.path for rule_set in engines.yara.rules]
-        if engines.yara.cache_dir is not None:
-            writable.append(engines.yara.cache_dir)
+    if engines.yara.enabled and engines.yara.cache_dir is not None:
+        writable.append(engines.yara.cache_dir)
     # The folder of each file: signature manifests, clamd socket re-created
     read_only = {path if path.is_dir() else path.parent for path in files}
     return Sandbox(config.scan.sandbox_user, tuple(sorted(read_only)), tuple(writable))
@@ -133,9 +208,16 @@ class Kiosk:
         source: DeviceSource,
         pool: WorkerPool,
         mounter: Mounter | None = None,
+        signatures_error: str | None = None,
     ) -> None:
-        """pool must be started; it is stopped by its owner."""
+        """pool must be started; it is stopped by its owner.
+
+        signatures_error: why the signatures cannot be used (the pool is not
+        started). The kiosk then scans nothing: it only accepts a signature
+        update device.
+        """
         self.config = config
+        self.signatures_error = signatures_error
         self.display = display
         self.source = source
         self.scanner = Scanner(pool, config.limits)
@@ -170,9 +252,12 @@ class Kiosk:
     # -- states ------------------------------------------------------------
 
     def on_start(self) -> State:
+        installed = installed_manifest(self.config.signatures.folder)
         log_event(
             logger,
             "kiosk_started",
+            ready=self.signatures_error is None,
+            signature_set=None if installed is None else installed.serial,
             fake_scan=self.config.kiosk.fake_scan,
             engines={e.name: e.version for e in self.scanner.engines},
             signatures={
@@ -189,11 +274,19 @@ class Kiosk:
             self.display.message(
                 "AUTO-MOUNT MODE - for development only, devices are not mounted read-only"
             )
+        self._show_ready()
+        return State.WAIT
+
+    def _show_ready(self) -> None:
+        if self.signatures_error is not None:
+            log_event(logger, "signatures_unusable", logging.ERROR, error=self.signatures_error)
+            self.display.message(f"NO VALID SIGNATURES: {self.signatures_error}")
+            self.display.message("This kiosk cannot scan: insert a signature update device.")
+            return
         for warning in stale_signatures(self.config, self.scanner.engines):
             log_event(logger, "signatures_stale", logging.WARNING, warning=warning)
             self.display.message(f"WARNING: {warning}")
         self.display.message("Ready. Insert a USB device.")
-        return State.WAIT
 
     def on_wait(self) -> State:
         self._unmount()
@@ -231,7 +324,60 @@ class Kiosk:
             log_event(logger, "mount_failed", logging.ERROR, node=self.device.node, error=str(ex))
             self.display.message(f"Cannot mount device: {ex}")
             return State.ERROR
+        root = self.mounter.mount_point
+        if self.config.signatures.update_from_devices and _has_update(root):
+            self._update_signatures(root / UPDATE_FOLDER)
+            self.display.message("A signature update device is not scanned. Remove the device.")
+            self._release()
+            return State.WAIT
+        if self.signatures_error is not None:
+            log_event(logger, "scan_refused", logging.WARNING, reason=self.signatures_error)
+            self.display.message("Cannot scan: no valid signatures. Remove the device.")
+            self._release()
+            return State.WAIT
         return State.SCAN
+
+    def _update_signatures(self, source: Path) -> None:
+        """Install the signature set of the device, then reload the engines."""
+        folder = self.config.signatures.folder
+        before = installed_manifest(folder)
+        self.display.message("Signature update device: verifying the signature set...")
+        try:
+            manifest = install(source, folder, trusted_keys(self.config.signatures.keys))
+        except NotNewerError as ex:
+            log_event(logger, "signatures_not_newer", reason=str(ex))
+            self.display.message(f"Signatures already up to date: {ex}")
+            return
+        except (SignatureSetError, OSError) as ex:
+            log_event(logger, "signatures_refused", logging.WARNING, reason=str(ex))
+            self.display.message(f"Signature update REFUSED: {ex}")
+            return
+        log_event(
+            logger,
+            "signatures_installed",
+            serial=manifest.serial,
+            created=manifest.created.isoformat(),
+            files=len(manifest.files),
+            previous=None if before is None else before.serial,
+        )
+        self.display.message(f"Signatures updated: set {manifest.serial}")
+        self._reload_engines(before, manifest)
+
+    def _reload_engines(self, before: Manifest | None, after: Manifest) -> None:
+        if self.config.engines.clamav.enabled and _changed(before, after, "clamav/"):
+            restart_clamd()
+        pool = self.scanner.pool
+        pool.stop()
+        try:
+            check_signatures(self.config)
+            pool.start()
+        except (SignatureSetError, EngineError) as ex:
+            pool.stop()
+            self.signatures_error = str(ex)
+        else:
+            self.signatures_error = None
+            log_event(logger, "engines_reloaded", engines={e.name: e.version for e in pool.engines})
+        self._show_ready()
 
     def on_scan(self) -> State:
         root = self.mounter.mount_point
@@ -460,3 +606,20 @@ class Kiosk:
             self.mounter.unmount()
         except DeviceError as ex:
             log_event(logger, "unmount_failed", logging.ERROR, error=str(ex))
+
+
+def _has_update(root: Path) -> bool:
+    """The device holds a signature set at its root (a folder, not a link)."""
+    try:
+        return stat.S_ISDIR(os.lstat(root / UPDATE_FOLDER).st_mode)
+    except OSError:
+        return False
+
+
+def _changed(before: Manifest | None, after: Manifest, prefix: str) -> bool:
+    def files(manifest: Manifest | None) -> set[tuple[str, str]]:
+        if manifest is None:
+            return set()
+        return {(f.path, f.sha256) for f in manifest.files if f.path.startswith(prefix)}
+
+    return files(before) != files(after)

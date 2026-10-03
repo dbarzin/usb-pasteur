@@ -15,7 +15,7 @@ from usb_pasteur.engines.base import (
     Verdict,
 )
 from usb_pasteur.hashdb import HashDatabase, HashDatabaseError
-from usb_pasteur.signatures import describe_file, verify_signatures
+from usb_pasteur.signatures import describe_file
 
 MALWAREBAZAAR_DETECTION = "MalwareBazaar.KnownMalware"
 
@@ -32,7 +32,6 @@ class MalwareBazaarEngine(Engine):
         self._db: HashDatabase | None = None
 
     def load(self) -> None:
-        verify_signatures(self.name, [self.database])
         try:
             self._db = HashDatabase(self.database)
         except HashDatabaseError as ex:
@@ -80,7 +79,6 @@ class HashlookupEngine(Engine):
         self._filter: BloomFilter | None = None
 
     def load(self) -> None:
-        verify_signatures(self.name, [self.bloom])
         try:
             self._filter = BloomFilter(self.bloom)
         except BloomError as ex:

@@ -131,6 +131,10 @@ def config(tmp_path: Path) -> Config:
             "scan": {"workers": 2, "sandbox": False},
             "quarantine": {"folder": str(tmp_path / "quarantine")},
             "report": {"folder": str(tmp_path / "reports")},
+            "signatures": {
+                "folder": str(tmp_path / "signatures"),
+                "keys": str(tmp_path / "keys"),
+            },
             "logging": {"file": ""},
         }
     )

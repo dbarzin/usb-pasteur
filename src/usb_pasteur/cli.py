@@ -11,10 +11,11 @@ from pathlib import Path
 from usb_pasteur import __version__
 from usb_pasteur.config import DEFAULT_CONFIG_PATH, INTERFACES, Config, ConfigError, load_config
 from usb_pasteur.engines import EngineError
-from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines, build_pool
+from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines, build_pool, check_signatures
 from usb_pasteur.lock import AlreadyRunningError, InstanceLock
 from usb_pasteur.logs import setup_logging
 from usb_pasteur.sandbox import SandboxError
+from usb_pasteur.sigsets import SignatureSetError
 from usb_pasteur.ui import ConsoleDisplay, Display
 
 
@@ -61,10 +62,14 @@ def main(argv: list[str] | None = None) -> int:
         config = apply_overrides(load_config(args.config), args)
         pool = build_pool(config)
         if args.check_config:
+            check_signatures(config)
             # Load every engine once in this process to check the configuration
             build_engines(config)
     except (ConfigError, NoEngineError, SandboxError) as ex:
         print(f"usb-pasteur: {ex}", file=sys.stderr)
+        return 2
+    except SignatureSetError as ex:
+        print(f"usb-pasteur: signatures: {ex}", file=sys.stderr)
         return 2
     except EngineError as ex:
         _engine_error(ex)
@@ -87,20 +92,28 @@ def main(argv: list[str] | None = None) -> int:
         lock.release()
         return 1
 
-    # Engines are loaded once, by the scan workers, before the display starts
+    # Engines are loaded once, by the scan workers, before the display starts.
+    # Without valid signatures, the kiosk only accepts a signature update.
+    signatures_error = None
     try:
+        check_signatures(config)
         pool.start()
-    except EngineError as ex:
-        _engine_error(ex)
-        lock.release()
-        return 2
+    except (SignatureSetError, EngineError) as ex:
+        if not config.signatures.update_from_devices:
+            if isinstance(ex, EngineError):
+                _engine_error(ex)
+            else:
+                print(f"usb-pasteur: signatures: {ex}", file=sys.stderr)
+            lock.release()
+            return 2
+        signatures_error = str(ex)
 
     from usb_pasteur.monitor import UdevSource
 
     display = make_display(config.kiosk.interface)
     display.start()
     try:
-        Kiosk(config, display, UdevSource(), pool).run()
+        Kiosk(config, display, UdevSource(), pool, signatures_error=signatures_error).run()
     except KeyboardInterrupt:
         pass
     finally:

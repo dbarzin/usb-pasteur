@@ -5,10 +5,10 @@ its data files and how to obtain them for development, and how verdicts are
 decided.
 
 > [!WARNING]
-> Signature downloads described here are for **development only**. Signed,
-> verified updates (online and offline) come with phase 2. Until then, nothing
-> verifies the origin or the integrity of the signature files: see
-> `usb_pasteur.signatures.verify_signatures()`, the hook phase 2 will fill in.
+> Signature downloads described here are for **development only**: these
+> files are not signed. A kiosk only uses a signed signature set, verified at
+> each start and installed from a signature update device: see
+> [signatures.md](signatures.md).
 
 ## Pipeline
 

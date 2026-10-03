@@ -11,7 +11,6 @@ After=getty@tty1.service
 
 [Service]
 Type=simple
-ExecStartPre=/usr/bin/usb-pasteur --check-config
 ExecStart=/usr/bin/usb-pasteur
 Restart=always
 RestartSec=2
@@ -42,7 +41,7 @@ LogsDirectoryMode=0750
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_NET_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/media/usb-pasteur
+ReadWritePaths=/media/usb-pasteur /var/lib/usb-pasteur-signatures
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

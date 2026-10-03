@@ -19,8 +19,12 @@ SUPPORTED_FILESYSTEMS = ("vfat", "exfat", "ntfs", "ext4")
 CLAMD_MODES = ("auto", "fildes", "instream")
 COMPILE_ERROR_POLICIES = ("fail", "skip_rule")
 
-# Signatures and rules installed on the kiosk (updates come with phase 2)
-SIGNATURES_DIR = Path("/var/lib/usb-pasteur/signatures")
+# Signed signature sets installed on the kiosk (usb_pasteur.sigsets): the
+# engines read the files of the current one
+SIGNATURES_ROOT = Path("/var/lib/usb-pasteur-signatures")
+SIGNATURES_DIR = SIGNATURES_ROOT / "current"
+# Public keys trusted to sign signature sets (in the image, under dm-verity)
+SIGNATURE_KEYS = Path("/usr/share/usb-pasteur/keys")
 
 _RULE_SET_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -94,6 +98,14 @@ class ReportConfig:
 class SignaturesConfig:
     # Warn at startup when a signature database is older than this
     max_age_days: float = 7.0
+    # Installed signature sets, and the folder of the trusted public keys
+    folder: Path = SIGNATURES_ROOT
+    keys: Path = SIGNATURE_KEYS
+    # Verify the installed set at startup (signature and every file), and
+    # refuse engine files that are not part of it
+    verify: bool = True
+    # Install the signed set found on a device (usb-pasteur-signatures/)
+    update_from_devices: bool = True
 
 
 @dataclass(frozen=True)
@@ -293,9 +305,17 @@ def parse_config(data: dict[str, Any]) -> Config:
     )
 
     signatures = data.get("signatures", {})
-    _reject_unknown(signatures, {"max_age_days"}, "signatures")
+    _reject_unknown(
+        signatures,
+        {"max_age_days", "folder", "keys", "verify", "update_from_devices"},
+        "signatures",
+    )
     signatures_cfg = SignaturesConfig(
         max_age_days=_positive(signatures, "signatures", "max_age_days", 7.0),
+        folder=_path(signatures, "signatures", "folder", SIGNATURES_ROOT),
+        keys=_path(signatures, "signatures", "keys", SIGNATURE_KEYS),
+        verify=_get(signatures, "signatures", "verify", bool, True),
+        update_from_devices=_get(signatures, "signatures", "update_from_devices", bool, True),
     )
 
     report = data.get("report", {})

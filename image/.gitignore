@@ -3,3 +3,5 @@
 # Signing keys: never in the repository
 /mkosi.key
 /mkosi.crt
+/update.key
+/update.pem

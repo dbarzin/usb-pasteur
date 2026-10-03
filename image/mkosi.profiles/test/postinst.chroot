@@ -1,33 +1,30 @@
 #!/bin/sh
-# Test profile: test-only signatures and the matching configuration.
+# Test profile: a signed test signature set (serial 1) installed like an
+# update, and the matching configuration.
 set -eu
 
-SIGNATURES=/usr/share/usb-pasteur/test-signatures
-/usr/lib/usb-pasteur/bin/python3 "$SRCDIR/usb-pasteur/image/vm/corpus.py" signatures "$SIGNATURES"
-# Canary of the dm-verity test
-/usr/lib/usb-pasteur/bin/python3 "$SRCDIR/usb-pasteur/image/vm/corpus.py" \
-    canary /usr/share/usb-pasteur/verity-canary
+CORPUS="$SRCDIR/usb-pasteur/image/vm/corpus.py"
+PYTHON=/usr/lib/usb-pasteur/bin/python3
 
-# clamd only loads the test database; the Debian units require the official one
-mv "$SIGNATURES/usb-pasteur-test.hdb" /var/lib/clamav/
-for unit in clamav-daemon.service clamav-daemon.socket; do
-    mkdir -p "/etc/systemd/system/$unit.d"
-    printf '[Unit]\nConditionPathExistsGlob=\n' > "/etc/systemd/system/$unit.d/test-signatures.conf"
-done
+# Signature set detecting the corpus of the test key, signed with the
+# development update key, then installed in /var/lib/usb-pasteur-signatures
+SET=$(mktemp -d)
+"$PYTHON" "$CORPUS" signatures "$SET"
+usb-pasteur-signatures build "$SET" --serial 1 --key "$SRCDIR/usb-pasteur/image/update.key"
+usb-pasteur-signatures install "$SET"
+rm -r "$SET"
+
+# Canary of the dm-verity test
+"$PYTHON" "$CORPUS" canary /usr/share/usb-pasteur/verity-canary
 
 cat > /etc/usb-pasteur/usb-pasteur.toml <<CONFIG
-# Test profile configuration: test-only signatures (image/vm/corpus.py)
+# Test profile configuration: the test signature set (image/vm/corpus.py),
+# at the default paths but the YARA rules
 [kiosk]
 name = "vm-test"
 
-[engines.malwarebazaar]
-database = "$SIGNATURES/malwarebazaar.sha256.bin"
-
-[engines.hashlookup]
-bloom = "$SIGNATURES/hashlookup.bloom"
-
 [engines.yara]
-rules = [{ name = "vm-test", path = "$SIGNATURES/rules.yar" }]
+rules = [{ name = "vm-test", path = "/var/lib/usb-pasteur-signatures/current/yara/vm-test/rules.yar" }]
 
 [logging]
 level = "DEBUG"

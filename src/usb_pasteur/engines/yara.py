@@ -46,7 +46,7 @@ from usb_pasteur.engines.base import (
     Verdict,
 )
 from usb_pasteur.logs import get_logger, log_event
-from usb_pasteur.signatures import describe_file, verify_signatures
+from usb_pasteur.signatures import describe_file
 
 logger = get_logger("yara")
 
@@ -105,8 +105,6 @@ class YaraEngine(Engine):
 
     def load(self) -> None:
         self._files = {rs.name: self._rule_files(rs.name, rs.path) for rs in self.config.rules}
-        all_files = [f for files in self._files.values() for f in files]
-        verify_signatures(self.name, all_files)
         key = self._cache_key()
         if not self._load_cache(key):
             self._compile()

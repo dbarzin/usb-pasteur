@@ -4,8 +4,10 @@
 #   image/build.sh --profile test  test image (test signatures, root shell on hvc0)
 # Other arguments are passed to mkosi. An existing image is replaced. The
 # image is written to image/mkosi.output/.
-# The image is signed with image/mkosi.key and image/mkosi.crt: a development
-# key pair is generated when they do not exist (never use it for a kiosk).
+# The image is signed with image/mkosi.key and image/mkosi.crt, and trusts the
+# signature sets signed with image/update.key (public key image/update.pem):
+# development key pairs are generated when they do not exist (never use them
+# for a kiosk).
 set -eu
 
 cd "$(dirname "$0")"
@@ -25,6 +27,12 @@ exec docker run --rm --privileged \
             mkosi --genkey-common-name="$KEY_NAME" --genkey-valid-days=3650 genkey
             chown "$HOST_IDS" mkosi.key mkosi.crt
             chmod 0600 mkosi.key
+        fi
+        if [ ! -e update.key ] && [ ! -e update.pem ]; then
+            openssl genpkey -algorithm ed25519 -out update.key
+            openssl pkey -in update.key -pubout -out update.pem
+            chown "$HOST_IDS" update.key update.pem
+            chmod 0600 update.key
         fi
         status=0
         mkosi --force --cache-directory=/var/tmp/cache/images \

@@ -26,6 +26,12 @@ from typing import Any
 import corpus
 from machine import SIGNING_CERTIFICATE, Machine, MachineError, make_key, read_key
 
+# The kiosk code builds and signs the signature sets of the update test
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from usb_pasteur import sigsets
+
+UPDATE_KEY = Path("image/update.key")
+
 LOG = "/var/log/usb-pasteur/usb-pasteur.log"
 # Discoverable Partitions Specification: root partition of x86-64
 ROOT_TYPE = "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709"
@@ -94,6 +100,8 @@ def check_boot(vm: Machine, timeout: float) -> None:
     vm.shell.login(timeout)
     started = wait_event(vm, "kiosk_started", timeout=timeout)
     check(not started["fake_scan"], "the kiosk runs in FAKE_SCAN mode")
+    check(started["ready"], "the kiosk cannot scan")
+    check(started["signature_set"] == 1, f"signature set: {started['signature_set']}")
     engines = sorted(started["engines"])
     check(
         engines == ["clamav", "hashlookup", "malwarebazaar", "yara"],
@@ -102,7 +110,7 @@ def check_boot(vm: Machine, timeout: float) -> None:
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
     check(not failed, f"failed units:\n{failed}")
     wait_screen(vm, "Ready. Insert a USB device.")
-    print(f"kiosk started with engines {', '.join(engines)}")
+    print(f"kiosk started with engines {', '.join(engines)}, signature set 1 verified")
 
 
 def check_integrity(vm: Machine) -> None:
@@ -351,12 +359,98 @@ def check_reboot(vm: Machine, timeout: float) -> None:
     step("reboot: the data is kept, the system is unchanged")
     reports = count_reports(vm)
     vm.reboot(timeout)
-    wait_event(vm, "kiosk_started", occurrence=2, timeout=timeout)
+    started = wait_event(vm, "kiosk_started", occurrence=2, timeout=timeout)
+    check(started["ready"], "the kiosk cannot scan after a reboot")
+    check(started["signature_set"] == 2, f"signature set after a reboot: {started}")
     check(count_reports(vm) == reports, "scan reports lost after a reboot")
     check(not vm.shell.succeeds("test -e /usr/test"), "the root filesystem changed")
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
     check(not failed, f"failed units:\n{failed}")
-    print(f"{reports} scan reports kept")
+    print(f"{reports} scan reports kept, signature set 2 verified at start")
+
+
+def count_events(vm: Machine, name: str) -> int:
+    return sum(1 for e in events(vm) if e.get("event") == name)
+
+
+def wait_next_event(vm: Machine, name: str, before: int, **kwargs: Any) -> dict[str, Any]:
+    return wait_event(vm, name, occurrence=before + 1, **kwargs)
+
+
+def signature_set(
+    workdir: Path,
+    name: str,
+    serial: int,
+    signing_key: Path,
+    malwarebazaar: tuple[bytes, ...] = (),
+) -> Path:
+    """A key image holding a signature set, and the folder of the set."""
+    content = workdir / name
+    folder = content / sigsets.UPDATE_FOLDER
+    corpus.write_signatures(folder, malwarebazaar)
+    sigsets.build(folder, serial)
+    sigsets.sign(folder, signing_key)
+    return content
+
+
+def insert_update(vm: Machine, workdir: Path, content: Path, event: str) -> dict[str, Any]:
+    """Insert a signature update key; return the kiosk event about the set."""
+    image = workdir / f"{content.name}.img"
+    make_key(image, content)
+    before = {name: count_events(vm, name) for name in (event, "device_ejected")}
+    vm.insert_key(image)
+    result = wait_next_event(vm, event, before[event])
+    wait_next_event(vm, "device_ejected", before["device_ejected"])
+    vm.remove_key()
+    return result
+
+
+def check_signature_update(vm: Machine, workdir: Path) -> None:
+    step("signature update keys")
+    # A newer set, signed with the update key: it detects a new sample
+    content = signature_set(workdir, "update-2", 2, UPDATE_KEY, (corpus.NEW_SAMPLE,))
+    installed = insert_update(vm, workdir, content, "signatures_installed")
+    check(installed["serial"] == 2, f"installed set: {installed}")
+    wait_screen(vm, "Signatures updated: set 2")
+    wait_event(vm, "engines_reloaded")
+    print("set 2 installed, engines reloaded")
+
+    # The new sample is detected
+    sample = workdir / "new-sample"
+    sample.mkdir()
+    (sample / "new-sample.bin").write_bytes(corpus.NEW_SAMPLE)
+    make_key(workdir / "new-sample.img", sample)
+    before = count_events(vm, "device_cleaned")
+    vm.insert_key(workdir / "new-sample.img")
+    wait_next_event(vm, "device_cleaned", before, action=vm.press_key, timeout=60)
+    report = last_report(vm)
+    entry = next(f for f in report["files"] if f["path"] == "new-sample.bin")
+    detected_by = [e["engine"] for e in entry["engines"] if e["detections"]]
+    check(detected_by == ["malwarebazaar"], f"new sample detected by {detected_by}")
+    vm.remove_key()
+    print("the sample added by set 2 is detected")
+
+    # Refused: modified after signing, signed by another key, older
+    # (a file that differs from the installed set: an unchanged one is not
+    # read from the key, the installed copy is used)
+    content = signature_set(workdir, "update-3", 3, UPDATE_KEY, (corpus.NEW_SAMPLE, b"x"))
+    database = content / sigsets.UPDATE_FOLDER / corpus.MALWAREBAZAAR_DB
+    database.write_bytes(database.read_bytes()[:-1] + b"\0")
+    refused = insert_update(vm, workdir, content, "signatures_refused")
+    check("does not match the manifest" in refused["reason"], f"modified set: {refused}")
+    foreign = workdir / "foreign.key"
+    subprocess.run(
+        ["openssl", "genpkey", "-algorithm", "ed25519", "-out", str(foreign)], check=True
+    )
+    content = signature_set(workdir, "update-4", 4, foreign)
+    refused = insert_update(vm, workdir, content, "signatures_refused")
+    check("invalid signature" in refused["reason"], f"foreign set: {refused}")
+    content = signature_set(workdir, "update-old", 1, UPDATE_KEY)
+    old = insert_update(vm, workdir, content, "signatures_not_newer")
+    check("not newer than the installed 2" in old["reason"], f"older set: {old}")
+    current = vm.shell.run("readlink /var/lib/usb-pasteur-signatures/current").strip()
+    check(current == "sets/2", f"installed set: {current}")
+    print("refused: modified set, set signed by another key, older set")
 
 
 def check_infected_key(vm: Machine, key: Path) -> None:
@@ -442,9 +536,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.image}: no such image, run image/build.sh --profile test", file=sys.stderr)
         return 2
 
-    if not SIGNING_CERTIFICATE.exists():
-        print(f"{SIGNING_CERTIFICATE}: no signing certificate", file=sys.stderr)
-        return 2
+    for path in (SIGNING_CERTIFICATE, UPDATE_KEY):
+        if not path.exists():
+            print(f"{path}: no signing key, run image/build.sh", file=sys.stderr)
+            return 2
 
     image = args.image.resolve()
     with tempfile.TemporaryDirectory() as tmp:
@@ -461,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_filesystems(vm)
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
+                check_signature_update(vm, workdir)
                 check_usb_policy(vm)
                 check_hardening(vm)
                 check_reboot(vm, args.boot_timeout)

@@ -42,6 +42,7 @@ dev = [
 
 [project.scripts]
 usb-pasteur = "usb_pasteur.cli:main"
+usb-pasteur-signatures = "usb_pasteur.sigsets:main"
 
 [project.urls]
 Homepage = "https://github.com/dbarzin/usb-pasteur"

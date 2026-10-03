@@ -1,29 +1,33 @@
-"""Signature databases: provenance, freshness, and the verification hook.
+"""Signature databases: provenance and freshness.
 
-Each signature folder may contain a manifest.json describing its files, written
-by the update tool (phase 2) or by scripts/fetch-dev-signatures.py:
+The origin and integrity of the signature files are verified by the kiosk
+before the engines load them (usb_pasteur.sigsets). Their version, date and
+source come from:
+
+- the manifest.json of their folder, written by scripts/fetch-dev-signatures.py:
 
     {"hashlookup-full.bloom": {"version": "...", "date": "2026-10-01T00:00:00Z",
                                "source": "https://...", "sha256": "..."}}
 
-Without a manifest, the file modification time is used as the signature date.
+- or else the manifest of the signed signature set holding them (the date
+  of a file defaults to the creation date of the set);
+- or else the file modification time, for the date.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from usb_pasteur.engines.base import SignatureInfo
-from usb_pasteur.logs import get_logger, log_event
-
-logger = get_logger("signatures")
 
 MANIFEST = "manifest.json"
+# Manifest of a signed signature set (usb_pasteur.sigsets)
+SET_FORMAT = "usb-pasteur-signatures"
+MAX_DEPTH = 6
 
 
 def describe_file(
@@ -35,6 +39,10 @@ def describe_file(
     """
     default_date = date
     entry = _manifest_entry(path)
+    set_entry, created = _set_entry(path)
+    entry = {**set_entry, **entry}
+    if default_date is None and created is not None:
+        default_date = created
     date = None
     raw_date = entry.get("date")
     if isinstance(raw_date, str):
@@ -70,19 +78,23 @@ def _manifest_entry(path: Path) -> dict[str, object]:
     return entry if isinstance(entry, dict) else {}
 
 
-def verify_signatures(engine: str, paths: Sequence[Path]) -> None:
-    """Verify the integrity and origin of signature files before loading them.
-
-    Phase 2 hook: signed updates are not implemented yet, so nothing is
-    verified. Implementations must raise EngineError when a file is not trusted.
-    """
-    log_event(
-        logger,
-        "signatures_not_verified",
-        logging.DEBUG,
-        engine=engine,
-        files=[str(p) for p in paths],
-    )
+def _set_entry(path: Path) -> tuple[dict[str, object], datetime | None]:
+    """The entry of a file in the manifest of its signature set, and the set date."""
+    for folder in list(path.parents)[:MAX_DEPTH]:
+        try:
+            data = json.loads((folder / MANIFEST).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or data.get("format") != SET_FORMAT:
+            continue
+        files = data.get("files")
+        entry = files.get(path.relative_to(folder).as_posix()) if isinstance(files, dict) else None
+        try:
+            created = datetime.fromisoformat(str(data.get("created")))
+        except ValueError:
+            created = None
+        return (entry if isinstance(entry, dict) else {}), created
+    return {}, None
 
 
 @dataclass(frozen=True)
