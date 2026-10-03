@@ -282,3 +282,22 @@ def test_stale_signatures(config: Config) -> None:
     assert len(warnings) == 2
     assert warnings[0].startswith("clamav: signatures daily are old (")
     assert warnings[1] == "hashlookup: signatures bloom are old (unknown age)"
+
+
+def test_auto_mount(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
+    from usb_pasteur.device import SystemMountWatcher
+
+    config = dataclasses.replace(config, device=dataclasses.replace(config.device, auto_mount=True))
+    # The device node must exist: the kiosk checks it before cleaning
+    node = usb_tree.parent / "sdb1"
+    node.touch()
+    mounts = usb_tree.parent / "mounts"
+    mounts.write_text(f"{node} {usb_tree} vfat rw,nosuid,nodev 0 0\n")
+    watcher = SystemMountWatcher(["vfat"], mounts=mounts)
+    source = ListSource([DeviceEvent(Action.ADD, UsbDevice(str(node), "vfat", "KEY"))])
+    Kiosk(config, display, source, pool, watcher).run()
+    assert display.messages[1].startswith("AUTO-MOUNT MODE")
+    assert not (usb_tree / "docs" / "eicar.com").exists()
+    assert "Device cleaned! You can remove the device." in display.messages

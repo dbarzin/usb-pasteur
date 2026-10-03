@@ -37,7 +37,7 @@ Goal: restart from a clean base while reusing what works in pandora-box.
 | Quarantine of infected files | Kept |
 | Curses interface (administrator mode) | Kept |
 | Logging, logrotate, systemd service | Kept, moved to structured JSON |
-| USB auto-mount mode | Removed (no automount on the kiosk) |
+| USB auto-mount mode | Kept for development only (`device.auto_mount`): never on the kiosk, which mounts devices read-only itself |
 | Image slideshow display (`fim`) | Removed, replaced by the kiosk interface in phase 3 |
 | Single-instance lock | Kept |
 | `pypandora` calls | Removed, replaced by the engine pipeline |
@@ -129,6 +129,8 @@ sudo .venv/bin/usb-pasteur --config usb-pasteur.toml --interface console
 ```
 
 `sudo` resets `PATH`, so the kiosk is started with the full path of the executable installed in the virtual environment (`.venv/bin/usb-pasteur`).
+
+On a desktop that mounts USB devices itself (udisks automount), set `auto_mount = true` in `[device]`: the kiosk then uses the system mount instead of mounting the device, and can run without `sudo`. This is for development only: the system mount is usually read-write and not hardened.
 
 To work on the workflow without signatures, set `fake_scan = true` in `[kiosk]` (or use `--fake-scan`): only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
 

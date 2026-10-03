@@ -6,7 +6,14 @@ from typing import Any
 
 import pytest
 
-from usb_pasteur.device import DeviceError, Mounter, UsbDevice, mount_options
+from usb_pasteur.device import (
+    DeviceError,
+    Mounter,
+    SystemMountWatcher,
+    UsbDevice,
+    find_mount,
+    mount_options,
+)
 
 
 def test_mount_options_vfat() -> None:
@@ -67,3 +74,50 @@ def test_mount_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_missing_mount_point(tmp_path: Path) -> None:
     with pytest.raises(DeviceError, match="does not exist"):
         Mounter(tmp_path / "missing", ["vfat"]).mount(UsbDevice("/dev/sdb1", "vfat"))
+
+
+def mounts_file(tmp_path: Path, node: str, mount_point: Path, options: str = "rw,nosuid") -> Path:
+    escaped = str(mount_point).replace(" ", "\\040")
+    path = tmp_path / "mounts"
+    path.write_text(f"proc /proc proc rw 0 0\n{node} {escaped} vfat {options} 0 0\n")
+    return path
+
+
+def test_find_mount(tmp_path: Path) -> None:
+    mounts = mounts_file(tmp_path, "/dev/sdb1", Path("/media/didier/MY KEY"))
+    assert find_mount("/dev/sdb1", mounts) == (Path("/media/didier/MY KEY"), ["rw", "nosuid"])
+    assert find_mount("/dev/sdc1", mounts) is None
+    assert find_mount("/dev/sdb1", tmp_path / "missing") is None
+
+
+def test_system_mount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_command(argv: list[str], **kwargs: Any) -> None:
+        raise AssertionError("no mount command in auto-mount mode")
+
+    monkeypatch.setattr(subprocess, "run", no_command)
+    key = tmp_path / "key"
+    key.mkdir()
+    watcher = SystemMountWatcher(["vfat"], mounts=mounts_file(tmp_path, "/dev/sdb1", key))
+    watcher.mount(UsbDevice("/dev/sdb1", "vfat"))
+    assert watcher.mount_point == key
+    assert watcher.is_mounted()
+    watcher.remount_rw()
+    watcher.unmount()
+    assert watcher.device is None
+
+
+def test_system_mount_timeout(tmp_path: Path) -> None:
+    watcher = SystemMountWatcher(["vfat"], wait=0.2, mounts=tmp_path / "empty", poll=0.05)
+    (tmp_path / "empty").write_text("")
+    with pytest.raises(DeviceError, match=r"not mounted by the system after 0\.2s"):
+        watcher.mount(UsbDevice("/dev/sdb1", "vfat"))
+
+
+def test_system_mount_checks(tmp_path: Path) -> None:
+    mounts = mounts_file(tmp_path, "/dev/sdb1", tmp_path, "ro,nosuid")
+    watcher = SystemMountWatcher(["vfat"], mounts=mounts)
+    with pytest.raises(DeviceError, match="filesystem not allowed: ntfs"):
+        watcher.mount(UsbDevice("/dev/sdb1", "ntfs"))
+    watcher.mount(UsbDevice("/dev/sdb1", "vfat"))
+    with pytest.raises(DeviceError, match="read-only by the system"):
+        watcher.remount_rw()

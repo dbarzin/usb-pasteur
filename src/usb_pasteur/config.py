@@ -44,6 +44,10 @@ class DeviceConfig:
     use_sudo: bool = False
     allowed_filesystems: tuple[str, ...] = SUPPORTED_FILESYSTEMS
     command_timeout: float = 60.0
+    # Development only: use the mount made by the system (desktop automount)
+    # instead of mounting the device read-only; mount_point is then ignored
+    auto_mount: bool = False
+    auto_mount_wait: float = 15.0
 
 
 @dataclass(frozen=True)
@@ -205,7 +209,16 @@ def parse_config(data: dict[str, Any]) -> Config:
 
     device = data.get("device", {})
     _reject_unknown(
-        device, {"mount_point", "use_sudo", "allowed_filesystems", "command_timeout"}, "device"
+        device,
+        {
+            "mount_point",
+            "use_sudo",
+            "allowed_filesystems",
+            "command_timeout",
+            "auto_mount",
+            "auto_mount_wait",
+        },
+        "device",
     )
     filesystems = _get(device, "device", "allowed_filesystems", list, list(SUPPORTED_FILESYSTEMS))
     for fs in filesystems:
@@ -219,6 +232,8 @@ def parse_config(data: dict[str, Any]) -> Config:
         use_sudo=_get(device, "device", "use_sudo", bool, False),
         allowed_filesystems=tuple(filesystems),
         command_timeout=_positive(device, "device", "command_timeout", 60.0),
+        auto_mount=_get(device, "device", "auto_mount", bool, False),
+        auto_mount_wait=_positive(device, "device", "auto_mount_wait", 15.0),
     )
 
     scan = data.get("scan", {})

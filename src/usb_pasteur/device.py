@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -131,3 +133,92 @@ class Mounter:
             raise DeviceError(f"{name} timed out") from ex
         except FileNotFoundError as ex:
             raise DeviceError(f"command not found: {argv[0]}") from ex
+
+
+MOUNTS = Path("/proc/self/mounts")
+
+
+def find_mount(node: str, mounts: Path = MOUNTS) -> tuple[Path, list[str]] | None:
+    """Mount point and options of a device node, from /proc/self/mounts."""
+    try:
+        lines = mounts.read_text(encoding="utf-8", errors="surrogateescape").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 4 and fields[0] == node:
+            return Path(_unescape_mount(fields[1])), fields[3].split(",")
+    return None
+
+
+def _unescape_mount(value: str) -> str:
+    """Decode the octal escapes of /proc/self/mounts (\\040 for a space...)."""
+    data = os.fsencode(value)
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        if data[i : i + 1] == b"\\" and data[i + 1 : i + 4].isdigit():
+            out.append(int(data[i + 1 : i + 4], 8))
+            i += 4
+        else:
+            out.append(data[i])
+            i += 1
+    return os.fsdecode(bytes(out))
+
+
+class SystemMountWatcher(Mounter):
+    """Use the mount made by the operating system (desktop automount).
+
+    DEVELOPMENT ONLY (device.auto_mount): the system mounts the device with
+    its own options, usually read-write and possibly without noexec, so the
+    hardened read-only mount of the kiosk is lost. The device is never mounted
+    nor unmounted here: we wait for the system mount and use its mount point.
+    """
+
+    def __init__(
+        self,
+        allowed_filesystems: Sequence[str],
+        wait: float = 15.0,
+        mounts: Path = MOUNTS,
+        poll: float = 0.5,
+    ) -> None:
+        super().__init__(Path("/nonexistent"), allowed_filesystems)
+        self.wait = wait
+        self.mounts = mounts
+        self.poll = poll
+        self.options: list[str] = []
+
+    def mount(self, device: UsbDevice, read_only: bool = True) -> None:
+        if device.fs_type not in self.allowed_filesystems:
+            raise DeviceError(f"filesystem not allowed: {device.fs_type or 'unknown'}")
+        deadline = time.monotonic() + self.wait
+        while (found := find_mount(device.node, self.mounts)) is None:
+            if time.monotonic() >= deadline:
+                raise DeviceError(f"not mounted by the system after {self.wait:g}s")
+            time.sleep(self.poll)
+        self.mount_point, self.options = found
+        self.device = device
+        log_event(
+            logger,
+            "device_automounted",
+            logging.WARNING,
+            node=device.node,
+            mount_point=str(self.mount_point),
+            options=",".join(self.options),
+        )
+
+    def remount_rw(self) -> None:
+        if self.device is None:
+            raise DeviceError("no device mounted")
+        if "rw" not in self.options:
+            raise DeviceError("device mounted read-only by the system")
+
+    def unmount(self) -> None:
+        # The system owns the mount: only flush the writes of the cleaning
+        if self.device is not None:
+            os.sync()
+        self.device = None
+        self.options = []
+
+    def is_mounted(self) -> bool:
+        return self.device is not None and find_mount(self.device.node, self.mounts) is not None

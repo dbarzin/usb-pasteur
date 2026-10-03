@@ -55,7 +55,12 @@ def test_full_config() -> None:
     config = parse_config(
         {
             "kiosk": {"name": "kiosk-01", "fake_scan": True, "interface": "console"},
-            "device": {"allowed_filesystems": ["vfat"], "use_sudo": True},
+            "device": {
+                "allowed_filesystems": ["vfat"],
+                "use_sudo": True,
+                "auto_mount": True,
+                "auto_mount_wait": 5,
+            },
             "scan": {"workers": 8, "suspicious": "warn", "on_error": "warn", "fake_delay": 1},
             "limits": {"max_file_size": 1000, "max_files": 10, "max_depth": 3},
             "policy": {"min_malicious_engines": 2},
@@ -100,6 +105,8 @@ def test_full_config() -> None:
     assert yara.malicious_score == 80
     assert config.kiosk.name == "kiosk-01"
     assert config.device.allowed_filesystems == ("vfat",)
+    assert config.device.auto_mount is True
+    assert config.device.auto_mount_wait == 5.0
     assert config.scan.fake_delay == 1.0
     assert config.scan.suspicious == "warn"
     assert config.logging.file is None
@@ -118,6 +125,8 @@ def test_full_config() -> None:
         ({"device": {"allowed_filesystems": ["btrfs"]}}, "unsupported filesystem"),
         ({"device": {"allowed_filesystems": [1]}}, "list of strings"),
         ({"device": {"command_timeout": 0}}, "must be positive"),
+        ({"device": {"auto_mount": "yes"}}, "device.auto_mount must be of type bool"),
+        ({"device": {"auto_mount_wait": 0}}, "device.auto_mount_wait must be positive"),
         ({"scan": {"workers": 0}}, "between 1 and 64"),
         ({"scan": {"workers": True}}, "must be of type int"),
         ({"scan": {"max_file_size": 1}}, "moved to limits.max_file_size"),

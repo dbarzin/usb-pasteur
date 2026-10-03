@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from usb_pasteur.config import Config
-from usb_pasteur.device import DeviceError, Mounter, UsbDevice
+from usb_pasteur.device import DeviceError, Mounter, SystemMountWatcher, UsbDevice
 from usb_pasteur.engines import Engine
 from usb_pasteur.engines.registry import NoEngineError, engine_specs, load_engines
 from usb_pasteur.logs import get_logger, log_event
@@ -57,6 +57,18 @@ def build_pool(config: Config) -> WorkerPool:
     )
 
 
+def make_mounter(config: Config) -> Mounter:
+    device = config.device
+    if device.auto_mount:
+        return SystemMountWatcher(device.allowed_filesystems, device.auto_mount_wait)
+    return Mounter(
+        device.mount_point,
+        device.allowed_filesystems,
+        use_sudo=device.use_sudo,
+        timeout=device.command_timeout,
+    )
+
+
 def stale_signatures(config: Config, engines: list[EngineInfo]) -> list[str]:
     """Warnings for signature databases older than their maximum age."""
     engine_configs = {
@@ -90,12 +102,7 @@ class Kiosk:
         self.display = display
         self.source = source
         self.scanner = Scanner(pool, config.limits)
-        self.mounter = mounter or Mounter(
-            config.device.mount_point,
-            config.device.allowed_filesystems,
-            use_sudo=config.device.use_sudo,
-            timeout=config.device.command_timeout,
-        )
+        self.mounter = mounter or make_mounter(config)
         self.quarantine = (
             Quarantine(config.quarantine.folder) if config.quarantine.enabled else None
         )
@@ -141,6 +148,10 @@ class Kiosk:
         )
         if self.config.kiosk.fake_scan:
             self.display.message("FAKE SCAN MODE - for development only, no real detection")
+        if self.config.device.auto_mount:
+            self.display.message(
+                "AUTO-MOUNT MODE - for development only, devices are not mounted read-only"
+            )
         for warning in stale_signatures(self.config, self.scanner.engines):
             log_event(logger, "signatures_stale", logging.WARNING, warning=warning)
             self.display.message(f"WARNING: {warning}")
