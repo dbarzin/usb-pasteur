@@ -25,6 +25,9 @@ Environment=TERM=linux
 # Directories created by systemd
 StateDirectory=usb-pasteur
 StateDirectoryMode=0700
+# Compiled YARA rules (engines.yara.cache_dir)
+CacheDirectory=usb-pasteur
+CacheDirectoryMode=0700
 LogsDirectory=usb-pasteur
 LogsDirectoryMode=0750
 
@@ -46,7 +49,9 @@ RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+# No MemoryDenyWriteExecute: YARA-X compiles its rules to native code at run
+# time (wasmtime) and fails with it. Phase 2 restores it for every process but
+# the sandboxed YARA analyzer.
 SystemCallArchitectures=native
 IPAddressDeny=any
 

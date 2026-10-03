@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Sequence
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from collections.abc import Callable
 from pathlib import Path
 
 from usb_pasteur.config import Config, LimitsConfig
-from usb_pasteur.engines import Engine, Verdict
-from usb_pasteur.filetype import FileTypeDetector
+from usb_pasteur.engines import Verdict
 from usb_pasteur.inventory import UNREADABLE, Skipped, take_inventory
 from usb_pasteur.logs import get_logger, log_event
-from usb_pasteur.pipeline import PipelineOptions, scan_entry
+from usb_pasteur.pipeline import PipelineOptions
 from usb_pasteur.results import FileResult, ScanSummary
 from usb_pasteur.text import escape, human_size, printable
+from usb_pasteur.workers import EngineInfo, WorkerPool
 
 __all__ = [
     "FileResult",
@@ -34,20 +33,15 @@ ProgressCallback = Callable[[FileResult, int, int], None]
 
 
 class Scanner:
-    """Inventory a directory tree, then scan its regular files in a thread pool."""
+    """Inventory a directory tree, then scan its regular files in the worker pool."""
 
-    def __init__(
-        self,
-        engines: Sequence[Engine],
-        workers: int,
-        limits: LimitsConfig,
-        options: PipelineOptions | None = None,
-    ) -> None:
-        self.engines = list(engines)
-        self.workers = workers
+    def __init__(self, pool: WorkerPool, limits: LimitsConfig) -> None:
+        self.pool = pool
         self.limits = limits
-        self.options = options or PipelineOptions()
-        self._detector = FileTypeDetector()
+
+    @property
+    def engines(self) -> list[EngineInfo]:
+        return self.pool.engines
 
     def scan_tree(self, root: Path, on_progress: ProgressCallback | None = None) -> ScanSummary:
         """Scan all files under root.
@@ -84,23 +78,7 @@ class Scanner:
 
         for skipped in inventory.skipped:
             collect(_skipped_result(root, skipped))
-
-        # Bound the number of pending files so huge devices do not fill memory
-        max_pending = self.workers * 4
-        pending: set[Future[FileResult]] = set()
-        with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="scan") as pool:
-            for entry in inventory.files:
-                pending.add(
-                    pool.submit(scan_entry, root, entry, self.engines, self._detector, self.options)
-                )
-                if len(pending) >= max_pending:
-                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
-                    for future in done:
-                        collect(future.result())
-            while pending:
-                done, pending = wait(pending, return_when=FIRST_COMPLETED)
-                for future in done:
-                    collect(future.result())
+        self.pool.scan(root, inventory.files, collect)
 
         summary.duration = time.monotonic() - start
         log_event(
@@ -147,7 +125,8 @@ def _skipped_result(root: Path, skipped: Skipped) -> FileResult:
 def pipeline_options(config: Config) -> PipelineOptions:
     hashlookup = config.engines.hashlookup
     return PipelineOptions(
-        skip_content_for_known=hashlookup.enabled and hashlookup.skip_content_engines
+        skip_content_for_known=hashlookup.enabled and hashlookup.skip_content_engines,
+        min_malicious_engines=config.policy.min_malicious_engines,
     )
 
 

@@ -5,14 +5,14 @@ import stat
 from pathlib import Path
 
 from usb_pasteur.config import LimitsConfig
-from usb_pasteur.engines import FakeEngine
 from usb_pasteur.engines.fake import EICAR
 from usb_pasteur.quarantine import Quarantine
 from usb_pasteur.scanner import Scanner
+from usb_pasteur.workers import WorkerPool
 
 
-def test_store(usb_tree: Path, tmp_path: Path) -> None:
-    summary = Scanner([FakeEngine()], 1, LimitsConfig()).scan_tree(usb_tree)
+def test_store(usb_tree: Path, tmp_path: Path, fake_pool: WorkerPool) -> None:
+    summary = Scanner(fake_pool, LimitsConfig()).scan_tree(usb_tree)
     folder = Quarantine(tmp_path / "q").store(summary.infected, usb_tree)
     assert folder is not None
     stored = folder / "00001.bin"

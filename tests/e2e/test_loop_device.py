@@ -17,7 +17,7 @@ import pytest
 from usb_pasteur.config import parse_config
 from usb_pasteur.device import Mounter, UsbDevice
 from usb_pasteur.engines.fake import EICAR
-from usb_pasteur.kiosk import Kiosk, build_engines
+from usb_pasteur.kiosk import Kiosk, build_pool
 from usb_pasteur.monitor import Action, DeviceEvent
 
 from ..conftest import ListSource, RecordingDisplay
@@ -108,7 +108,8 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
     display.progress = record  # type: ignore[method-assign]
     mounter = Mounter(mount_point, config.device.allowed_filesystems)
     source = ListSource([DeviceEvent(Action.ADD, usb_key)])
-    Kiosk(config, display, source, build_engines(config), mounter).run()
+    with build_pool(config) as pool:
+        Kiosk(config, display, source, pool, mounter).run()
 
     # The device was scanned read-only with hardened options, then unmounted
     assert options_during_scan

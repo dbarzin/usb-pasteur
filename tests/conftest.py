@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -7,8 +9,11 @@ import pytest
 
 from usb_pasteur.config import Config, parse_config
 from usb_pasteur.device import Mounter, UsbDevice
+from usb_pasteur.engines import EngineSpec, FakeEngine
 from usb_pasteur.engines.fake import EICAR
 from usb_pasteur.monitor import DeviceEvent
+from usb_pasteur.pipeline import PipelineOptions
+from usb_pasteur.workers import WorkerPool
 
 
 @dataclass
@@ -79,6 +84,33 @@ class DirectoryMounter(Mounter):
 
     def is_present(self) -> bool:
         return self.present and self.mounted
+
+
+@contextmanager
+def started_pool(
+    specs: list[EngineSpec],
+    workers: int = 2,
+    file_timeout: float = 60.0,
+    options: PipelineOptions | None = None,
+    engine_grace: float = 0.5,
+) -> Iterator[WorkerPool]:
+    pool = WorkerPool(
+        specs, options or PipelineOptions(), workers, file_timeout, engine_grace=engine_grace
+    )
+    pool.start()
+    try:
+        yield pool
+    finally:
+        pool.stop()
+
+
+FAKE = [EngineSpec("fake", FakeEngine)]
+
+
+@pytest.fixture
+def fake_pool() -> Iterator[WorkerPool]:
+    with started_pool(FAKE) as pool:
+        yield pool
 
 
 @pytest.fixture

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Sequence
 from pathlib import Path
 
 from usb_pasteur.config import Config
@@ -13,10 +12,14 @@ from usb_pasteur.engines import Engine
 from usb_pasteur.engines.registry import NoEngineError, engine_specs, load_engines
 from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.monitor import Action, DeviceSource
+from usb_pasteur.policy import device_verdict
 from usb_pasteur.quarantine import Quarantine
 from usb_pasteur.scanner import FileResult, Scanner, ScanSummary, describe, pipeline_options
+from usb_pasteur.signatures import find_stale
 from usb_pasteur.statemachine import State, StateMachine
+from usb_pasteur.text import escape
 from usb_pasteur.ui import Display
+from usb_pasteur.workers import EngineInfo, WorkerPool
 
 logger = get_logger("kiosk")
 
@@ -24,12 +27,44 @@ logger = get_logger("kiosk")
 _MAX_LISTED = 10
 
 
-__all__ = ["Kiosk", "NoEngineError", "build_engines"]
+__all__ = ["Kiosk", "NoEngineError", "build_engines", "build_pool", "stale_signatures"]
 
 
 def build_engines(config: Config) -> list[Engine]:
-    """Load the enabled engines: raise NoEngineError or EngineError on failure."""
+    """Load the enabled engines in this process (configuration check).
+
+    Raise NoEngineError or EngineError on failure.
+    """
     return load_engines(engine_specs(config))
+
+
+def build_pool(config: Config) -> WorkerPool:
+    """The scan worker pool (not started); raise NoEngineError without engine."""
+    return WorkerPool(
+        engine_specs(config),
+        pipeline_options(config),
+        config.scan.workers,
+        config.scan.file_timeout,
+    )
+
+
+def stale_signatures(config: Config, engines: list[EngineInfo]) -> list[str]:
+    """Warnings for signature databases older than their maximum age."""
+    engine_configs = {
+        "malwarebazaar": config.engines.malwarebazaar.max_age_days,
+        "hashlookup": config.engines.hashlookup.max_age_days,
+        "clamav": config.engines.clamav.max_age_days,
+        "yara": config.engines.yara.max_age_days,
+    }
+    warnings = []
+    for engine in engines:
+        if engine.name not in engine_configs:
+            continue
+        max_age = engine_configs[engine.name] or config.signatures.max_age_days
+        for stale in find_stale(engine.name, engine.signatures, max_age):
+            age = "unknown age" if stale.age_days == float("inf") else f"{stale.age_days:.0f} days"
+            warnings.append(f"{engine.name}: signatures {stale.signature.name} are old ({age})")
+    return warnings
 
 
 class Kiosk:
@@ -38,15 +73,14 @@ class Kiosk:
         config: Config,
         display: Display,
         source: DeviceSource,
-        engines: Sequence[Engine],
+        pool: WorkerPool,
         mounter: Mounter | None = None,
     ) -> None:
+        """pool must be started; it is stopped by its owner."""
         self.config = config
         self.display = display
         self.source = source
-        self.scanner = Scanner(
-            engines, config.scan.workers, config.limits, pipeline_options(config)
-        )
+        self.scanner = Scanner(pool, config.limits)
         self.mounter = mounter or Mounter(
             config.device.mount_point,
             config.device.allowed_filesystems,
@@ -85,10 +119,20 @@ class Kiosk:
             logger,
             "kiosk_started",
             fake_scan=self.config.kiosk.fake_scan,
-            engines=[e.name for e in self.scanner.engines],
+            engines={e.name: e.version for e in self.scanner.engines},
+            signatures={
+                e.name: [
+                    [s.name, s.version, s.date.isoformat() if s.date else None]
+                    for s in e.signatures
+                ]
+                for e in self.scanner.engines
+            },
         )
         if self.config.kiosk.fake_scan:
             self.display.message("FAKE SCAN MODE - for development only, no real detection")
+        for warning in stale_signatures(self.config, self.scanner.engines):
+            log_event(logger, "signatures_stale", logging.WARNING, warning=warning)
+            self.display.message(f"WARNING: {warning}")
         self.display.message("Ready. Insert a USB device.")
         return State.WAIT
 
@@ -146,7 +190,7 @@ class Kiosk:
         self.display.progress(0)
 
         def on_progress(result: FileResult, done: int, total: int) -> None:
-            self.display.message(describe(result))
+            self.display.message(f"[{done}/{total}] {describe(result)}")
             self.display.progress(min(99, done * 100 // max(1, total)))
 
         self.summary = self.scanner.scan_tree(root, on_progress)
@@ -154,8 +198,10 @@ class Kiosk:
         s = self.summary
         self.display.message(
             f"Scan done in {s.duration:.1f}s, {len(s.files)} files scanned, "
-            f"{len(s.infected)} files infected, {len(s.suspicious)} files suspicious"
+            f"{len(s.infected)} files infected, {len(s.suspicious)} files suspicious, "
+            f"{len(s.unscanned)} files not fully scanned"
         )
+        log_event(logger, "device_verdict", verdict=device_verdict(s).value, complete=s.complete)
         self.to_remove = s.infected
         if self.config.scan.suspicious == "block":
             self.to_remove = s.infected + s.suspicious
@@ -176,9 +222,13 @@ class Kiosk:
             self._list(
                 f"WARNING: {len(suspicious)} suspicious files, use with caution:", suspicious
             )
+        not_verified = self._check_complete(self.summary)
         if not infected:
             self._unmount()
-            self.display.message("No infected file found. You can remove the device.")
+            if not_verified:
+                self.display.message("DEVICE NOT VERIFIED: do not use it. Remove the device.")
+            else:
+                self.display.message("No infected file found. You can remove the device.")
             return State.WAIT
 
         log_event(logger, "infected_files", count=len(infected))
@@ -199,7 +249,11 @@ class Kiosk:
         removed = sum(self._remove(result.path) for result in infected)
         self._unmount()
         log_event(logger, "device_cleaned", removed=removed, infected=len(infected))
-        if removed == len(infected):
+        if removed == len(infected) and not_verified:
+            self.display.message(
+                "Device cleaned, but NOT VERIFIED: do not use it. Remove the device."
+            )
+        elif removed == len(infected):
             self.display.message("Device cleaned! You can remove the device.")
         else:
             self.display.message(f"Device NOT cleaned: {len(infected) - removed} files remain")
@@ -212,6 +266,32 @@ class Kiosk:
 
     # -- helpers -----------------------------------------------------------
 
+    def _check_complete(self, summary: ScanSummary) -> bool:
+        """Report files that were not fully scanned.
+
+        Return True when the device must be rejected (scan.on_error = "block").
+        Unscanned files are never removed: they are not known to be malicious.
+        """
+        if summary.complete:
+            return False
+        unscanned = summary.unscanned
+        block = self.config.scan.on_error == "block"
+        log_event(
+            logger,
+            "device_not_verified" if block else "device_incomplete",
+            logging.WARNING,
+            files=len(unscanned),
+            reasons=summary.incomplete_reasons,
+        )
+        if block:
+            title = f"{len(unscanned)} files could not be fully scanned:"
+        else:
+            title = f"WARNING: {len(unscanned)} files could not be fully scanned, use with caution:"
+        self._list(title, unscanned)
+        for reason in summary.incomplete_reasons:
+            self.display.message(f"Not scanned: {reason}")
+        return block
+
     def _list(self, title: str, results: list[FileResult]) -> None:
         self.display.message(title)
         for result in results[:_MAX_LISTED]:
@@ -223,15 +303,17 @@ class Kiosk:
         root = self.mounter.mount_point
         # Never follow a link out of the device
         if not Path(os.path.realpath(path)).is_relative_to(os.path.realpath(root)):
-            log_event(logger, "remove_refused", logging.ERROR, path=str(path))
+            log_event(logger, "remove_refused", logging.ERROR, path=escape(str(path)))
             return False
         try:
             path.unlink()
         except OSError as ex:
-            log_event(logger, "remove_failed", logging.ERROR, path=str(path), error=ex.strerror)
+            log_event(
+                logger, "remove_failed", logging.ERROR, path=escape(str(path)), error=ex.strerror
+            )
             self.display.message(f"Could not remove {path.name}: {ex.strerror}")
             return False
-        log_event(logger, "file_removed", path=str(path))
+        log_event(logger, "file_removed", path=escape(str(path)))
         self.display.message(f"{path.relative_to(root)} removed")
         return True
 

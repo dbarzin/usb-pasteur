@@ -8,17 +8,21 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from usb_pasteur.engines import Engine, EngineKind, EngineResult, FileInfo, Verdict, aggregate
+from usb_pasteur.engines import Engine, EngineKind, EngineResult, FileInfo, Verdict
 from usb_pasteur.filetype import FileTypeDetector
 from usb_pasteur.hashing import hash_fd
 from usb_pasteur.inventory import Entry, UnsafeFileError, open_entry
+from usb_pasteur.policy import KNOWN_FILE, aggregate_file
 from usb_pasteur.results import FileResult
 
-KNOWN_FILE = "known file (hashlookup)"
+__all__ = ["KNOWN_FILE", "EngineCallback", "PipelineOptions", "run_engines", "scan_entry"]
+
+# Called before each engine runs (the scan watchdog arms the engine timeout)
+EngineCallback = Callable[[Engine], None]
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,8 @@ class PipelineOptions:
     # Skip the content engines for files known by a hash engine (hashlookup),
     # unless a hash engine reports them as malicious
     skip_content_for_known: bool = True
+    # See policy.aggregate_file
+    min_malicious_engines: int = 1
 
 
 def scan_entry(
@@ -34,7 +40,9 @@ def scan_entry(
     engines: Sequence[Engine],
     detector: FileTypeDetector,
     options: PipelineOptions | None = None,
+    on_engine: EngineCallback | None = None,
 ) -> FileResult:
+    options = options or PipelineOptions()
     start = time.monotonic()
     path = root / entry.rel_path
 
@@ -64,31 +72,46 @@ def scan_entry(
                 description=file_type.description,
                 fd=fd,
             )
-            results = run_engines(info, engines, options or PipelineOptions())
+            results = run_engines(info, engines, options, on_engine)
     except UnsafeFileError as ex:
         return error(str(ex))
     except OSError as ex:
         return error(f"cannot read: {ex.strerror or ex}")
+    content_engines = {e.name for e in engines if e.kind is EngineKind.CONTENT}
+    verdict = aggregate_file(results, content_engines, options.min_malicious_engines)
     return FileResult(
         path=path,
         size=entry.size,
-        verdict=aggregate(results),
+        verdict=verdict,
         results=tuple(results),
+        detail=_detail(verdict, results),
         duration=time.monotonic() - start,
         info=info,
         rel_path=entry.rel_path,
     )
 
 
+def _detail(verdict: Verdict, results: Sequence[EngineResult]) -> str:
+    if verdict is Verdict.ERROR:
+        errors = [f"{r.engine}: {r.detail}" for r in results if r.verdict is Verdict.ERROR]
+        return "; ".join(errors) or "no complete engine result"
+    if verdict is Verdict.CLEAN and any(r.reason == KNOWN_FILE for r in results):
+        return KNOWN_FILE
+    return ""
+
+
 def run_engines(
-    info: FileInfo, engines: Sequence[Engine], options: PipelineOptions
+    info: FileInfo,
+    engines: Sequence[Engine],
+    options: PipelineOptions,
+    on_engine: EngineCallback | None = None,
 ) -> list[EngineResult]:
     """Run the hash engines, then the content engines.
 
     A malicious hash always wins over a "known file" answer: the content
     engines are only skipped for known files that no engine reports.
     """
-    results = [run_engine(e, info) for e in engines if e.kind is EngineKind.HASH]
+    results = [run_engine(e, info, on_engine) for e in engines if e.kind is EngineKind.HASH]
     malicious = any(r.verdict is Verdict.MALICIOUS for r in results)
     known = any(r.facts.get("known") is True for r in results)
     for engine in engines:
@@ -97,12 +120,16 @@ def run_engines(
         if known and not malicious and options.skip_content_for_known:
             results.append(EngineResult(engine.name, Verdict.SKIPPED, reason=KNOWN_FILE))
         else:
-            results.append(run_engine(engine, info))
+            results.append(run_engine(engine, info, on_engine))
     return results
 
 
-def run_engine(engine: Engine, info: FileInfo) -> EngineResult:
+def run_engine(
+    engine: Engine, info: FileInfo, on_engine: EngineCallback | None = None
+) -> EngineResult:
     """Run one engine: an exception or an overrun of its timeout is an error."""
+    if on_engine is not None:
+        on_engine(engine)
     start = time.monotonic()
     try:
         result = engine.scan(info)

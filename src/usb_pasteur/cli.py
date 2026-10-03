@@ -11,7 +11,7 @@ from pathlib import Path
 from usb_pasteur import __version__
 from usb_pasteur.config import DEFAULT_CONFIG_PATH, INTERFACES, Config, ConfigError, load_config
 from usb_pasteur.engines import EngineError
-from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines
+from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines, build_pool
 from usb_pasteur.lock import AlreadyRunningError, InstanceLock
 from usb_pasteur.logs import setup_logging
 from usb_pasteur.ui import ConsoleDisplay, Display
@@ -58,13 +58,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         config = apply_overrides(load_config(args.config), args)
-        engines = build_engines(config)
+        pool = build_pool(config)
+        if args.check_config:
+            # Load every engine once in this process to check the configuration
+            build_engines(config)
     except (ConfigError, NoEngineError) as ex:
         print(f"usb-pasteur: {ex}", file=sys.stderr)
         return 2
     except EngineError as ex:
-        print(f"usb-pasteur: cannot load an enabled engine: {ex}", file=sys.stderr)
-        print("usb-pasteur: fix its configuration or disable it", file=sys.stderr)
+        _engine_error(ex)
         return 2
     if args.check_config:
         print(f"{args.config}: OK")
@@ -81,17 +83,32 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(config.kiosk.name, config.logging.level, config.logging.file)
     except OSError as ex:
         print(f"usb-pasteur: cannot open log file: {ex}", file=sys.stderr)
+        lock.release()
         return 1
+
+    # Engines are loaded once, by the scan workers, before the display starts
+    try:
+        pool.start()
+    except EngineError as ex:
+        _engine_error(ex)
+        lock.release()
+        return 2
 
     from usb_pasteur.monitor import UdevSource
 
     display = make_display(config.kiosk.interface)
     display.start()
     try:
-        Kiosk(config, display, UdevSource(), engines).run()
+        Kiosk(config, display, UdevSource(), pool).run()
     except KeyboardInterrupt:
         pass
     finally:
         display.stop()
+        pool.stop()
         lock.release()
     return 0
+
+
+def _engine_error(ex: EngineError) -> None:
+    print(f"usb-pasteur: cannot load an enabled engine: {ex}", file=sys.stderr)
+    print("usb-pasteur: fix its configuration or disable it", file=sys.stderr)

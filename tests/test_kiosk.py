@@ -2,32 +2,45 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from usb_pasteur.config import Config, parse_config
 from usb_pasteur.device import UsbDevice
-from usb_pasteur.engines import EngineError, EngineResult, FakeEngine, FileInfo, Verdict
-from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines
+from usb_pasteur.engines import EngineError, EngineSpec
+from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines, build_pool
 from usb_pasteur.monitor import Action, DeviceEvent
+from usb_pasteur.workers import WorkerPool
 
-from .conftest import DirectoryMounter, ListSource, RecordingDisplay
+from .conftest import DirectoryMounter, ListSource, RecordingDisplay, started_pool
+from .engines import MisbehavingEngine, SuspiciousEngine
 
 DEVICE = UsbDevice("/dev/sdb1", "vfat", "KEY")
 
 
+@pytest.fixture
+def pool(config: Config) -> Iterator[WorkerPool]:
+    with build_pool(config) as pool:
+        yield pool
+
+
 def make_kiosk(
-    config: Config, display: RecordingDisplay, mounter: DirectoryMounter, events: list[DeviceEvent]
+    config: Config,
+    display: RecordingDisplay,
+    mounter: DirectoryMounter,
+    events: list[DeviceEvent],
+    pool: WorkerPool,
 ) -> Kiosk:
-    return Kiosk(config, display, ListSource(events), build_engines(config), mounter)
+    return Kiosk(config, display, ListSource(events), pool, mounter)
 
 
 def test_infected_device_is_cleaned(
-    config: Config, display: RecordingDisplay, usb_tree: Path, tmp_path: Path
+    config: Config, display: RecordingDisplay, usb_tree: Path, tmp_path: Path, pool: WorkerPool
 ) -> None:
     mounter = DirectoryMounter(usb_tree)
-    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)]).run()
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
 
     assert not (usb_tree / "docs" / "eicar.com").exists()
     assert (usb_tree / "readme.txt").exists()
@@ -39,11 +52,15 @@ def test_infected_device_is_cleaned(
     assert json.loads(manifests[0].read_text())[0]["original_path"] == "docs/eicar.com"
 
 
-def test_clean_device(config: Config, display: RecordingDisplay, tmp_path: Path) -> None:
+def test_clean_device(
+    config: Config, display: RecordingDisplay, tmp_path: Path, pool: WorkerPool
+) -> None:
     root = tmp_path / "media"
     root.mkdir()
     (root / "file.txt").write_text("hello")
-    make_kiosk(config, display, DirectoryMounter(root), [DeviceEvent(Action.ADD, DEVICE)]).run()
+    make_kiosk(
+        config, display, DirectoryMounter(root), [DeviceEvent(Action.ADD, DEVICE)], pool
+    ).run()
 
     assert display.confirmations == 0
     assert "No infected file found. You can remove the device." in display.messages
@@ -51,10 +68,10 @@ def test_clean_device(config: Config, display: RecordingDisplay, tmp_path: Path)
 
 
 def test_device_removed_before_clean(
-    config: Config, display: RecordingDisplay, usb_tree: Path
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
 ) -> None:
     mounter = DirectoryMounter(usb_tree)
-    kiosk = make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)])
+    kiosk = make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool)
     original_confirm = display.confirm
 
     def remove_device(prompt: str) -> None:
@@ -68,7 +85,9 @@ def test_device_removed_before_clean(
     assert "Device removed before cleaning: NOT CLEANED" in display.messages
 
 
-def test_scan_is_read_only(config: Config, display: RecordingDisplay, usb_tree: Path) -> None:
+def test_scan_is_read_only(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
     mounter = DirectoryMounter(usb_tree)
     modes: list[bool | None] = []
     original_progress = display.progress
@@ -78,31 +97,37 @@ def test_scan_is_read_only(config: Config, display: RecordingDisplay, usb_tree: 
         original_progress(percent)
 
     display.progress = record  # type: ignore[method-assign]
-    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)]).run()
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
     assert modes and all(modes)
     assert mounter.read_only is False  # remounted read-write to clean
 
 
-def test_rejected_filesystem(config: Config, display: RecordingDisplay, tmp_path: Path) -> None:
+def test_rejected_filesystem(
+    config: Config, display: RecordingDisplay, tmp_path: Path, pool: WorkerPool
+) -> None:
     from usb_pasteur.device import Mounter
 
     (tmp_path / "media").mkdir()
     mounter = Mounter(tmp_path / "media", ["vfat"])
     event = DeviceEvent(Action.ADD, UsbDevice("/dev/sdb1", "ntfs"))
-    Kiosk(config, display, ListSource([event]), build_engines(config), mounter).run()
+    Kiosk(config, display, ListSource([event]), pool, mounter).run()
     assert "Cannot mount device: filesystem not allowed: ntfs" in display.messages
     assert "Error: please remove the device." in display.messages
 
 
-def test_device_removed(config: Config, display: RecordingDisplay, tmp_path: Path) -> None:
+def test_device_removed(
+    config: Config, display: RecordingDisplay, tmp_path: Path, pool: WorkerPool
+) -> None:
     mounter = DirectoryMounter(tmp_path)
-    make_kiosk(config, display, mounter, [DeviceEvent(Action.REMOVE, DEVICE)]).run()
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.REMOVE, DEVICE)], pool).run()
     assert display.devices == [None]
     assert "Device removed" in display.messages
 
 
-def test_fake_scan_banner(config: Config, display: RecordingDisplay, tmp_path: Path) -> None:
-    make_kiosk(config, display, DirectoryMounter(tmp_path), []).run()
+def test_fake_scan_banner(
+    config: Config, display: RecordingDisplay, tmp_path: Path, pool: WorkerPool
+) -> None:
+    make_kiosk(config, display, DirectoryMounter(tmp_path), [], pool).run()
     assert display.messages[0].startswith("FAKE SCAN MODE")
 
 
@@ -116,19 +141,11 @@ def test_no_engine_without_fake_scan() -> None:
         build_engines(parse_config({"engines": engines}))
 
 
-class SuspiciousEngine(FakeEngine):
-    """Fake engine that also reports files named *.suspect as suspicious."""
-
-    def scan(self, file: FileInfo) -> EngineResult:
-        if file.rel_path.endswith(".suspect"):
-            return EngineResult(self.name, Verdict.SUSPICIOUS, ("Heuristic",))
-        return super().scan(file)
-
-
 def run_with_policy(policy: str, config: Config, display: RecordingDisplay, root: Path) -> None:
     config = dataclasses.replace(config, scan=dataclasses.replace(config.scan, suspicious=policy))
     source = ListSource([DeviceEvent(Action.ADD, DEVICE)])
-    Kiosk(config, display, source, [SuspiciousEngine()], DirectoryMounter(root)).run()
+    with started_pool([EngineSpec("fake", SuspiciousEngine)]) as pool:
+        Kiosk(config, display, source, pool, DirectoryMounter(root)).run()
 
 
 def test_suspicious_block(
@@ -171,3 +188,97 @@ def test_suspicious_warn_only(config: Config, display: RecordingDisplay, tmp_pat
     assert display.confirmations == 0
     assert "WARNING: 1 suspicious files, use with caution:" in display.messages
     assert "No infected file found. You can remove the device." in display.messages
+
+
+def run_with_errors(on_error: str, config: Config, display: RecordingDisplay, root: Path) -> None:
+    config = dataclasses.replace(config, scan=dataclasses.replace(config.scan, on_error=on_error))
+    source = ListSource([DeviceEvent(Action.ADD, DEVICE)])
+    specs = [
+        EngineSpec("fake", SuspiciousEngine),
+        EngineSpec("m", MisbehavingEngine, ("raise", "bad-")),
+    ]
+    with started_pool(specs) as pool:
+        Kiosk(config, display, source, pool, DirectoryMounter(root)).run()
+
+
+def test_on_error_block(config: Config, display: RecordingDisplay, tmp_path: Path) -> None:
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "bad-file.txt").write_text("x")
+    (root / "good.txt").write_text("x")
+    run_with_errors("block", config, display, root)
+
+    # The unscanned file is reported, never removed, and the device is rejected
+    assert (root / "bad-file.txt").exists()
+    assert "1 files could not be fully scanned:" in display.messages
+    assert "bad-file.txt" in display.messages
+    assert display.messages[-1] == "DEVICE NOT VERIFIED: do not use it. Remove the device."
+    assert display.confirmations == 0
+
+
+def test_on_error_block_with_infected_file(
+    config: Config, display: RecordingDisplay, usb_tree: Path
+) -> None:
+    (usb_tree / "bad-file.txt").write_text("x")
+    run_with_errors("block", config, display, usb_tree)
+    assert not (usb_tree / "docs" / "eicar.com").exists()
+    assert (usb_tree / "bad-file.txt").exists()
+    assert display.messages[-1] == (
+        "Device cleaned, but NOT VERIFIED: do not use it. Remove the device."
+    )
+
+
+def test_on_error_warn(config: Config, display: RecordingDisplay, tmp_path: Path) -> None:
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "bad-file.txt").write_text("x")
+    run_with_errors("warn", config, display, root)
+    assert "WARNING: 1 files could not be fully scanned, use with caution:" in display.messages
+    assert display.messages[-1] == "No infected file found. You can remove the device."
+
+
+def test_limit_overrun_is_not_verified(
+    config: Config, display: RecordingDisplay, tmp_path: Path, pool: WorkerPool
+) -> None:
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "big.iso").write_bytes(b"x" * 100)
+    config = dataclasses.replace(
+        config, limits=dataclasses.replace(config.limits, max_file_size=10)
+    )
+    make_kiosk(
+        config, display, DirectoryMounter(root), [DeviceEvent(Action.ADD, DEVICE)], pool
+    ).run()
+    assert "1 files could not be fully scanned:" in display.messages
+    assert display.messages[-1] == "DEVICE NOT VERIFIED: do not use it. Remove the device."
+
+
+def test_progress_messages(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
+    make_kiosk(
+        config, display, DirectoryMounter(usb_tree), [DeviceEvent(Action.ADD, DEVICE)], pool
+    ).run()
+    progress = [m for m in display.messages if m.startswith("[")]
+    assert [m.split("]")[0] for m in progress] == ["[1/3", "[2/3", "[3/3"]
+
+
+def test_stale_signatures(config: Config) -> None:
+    from datetime import UTC, datetime
+
+    from usb_pasteur.engines import EngineKind, SignatureInfo
+    from usb_pasteur.kiosk import stale_signatures
+    from usb_pasteur.workers import EngineInfo
+
+    old = SignatureInfo("daily", "1", datetime(2020, 1, 1, tzinfo=UTC))
+    new = SignatureInfo("daily", "2", datetime.now(UTC))
+    engines = [
+        EngineInfo("clamav", EngineKind.CONTENT, "ClamAV", 60.0, (old,)),
+        EngineInfo("yara", EngineKind.CONTENT, "YARA-X", 60.0, (new,)),
+        EngineInfo("hashlookup", EngineKind.HASH, "", 10.0, (SignatureInfo("bloom"),)),
+        EngineInfo("fake", EngineKind.CONTENT, "", 1.0, (old,)),
+    ]
+    warnings = stale_signatures(config, engines)
+    assert len(warnings) == 2
+    assert warnings[0].startswith("clamav: signatures daily are old (")
+    assert warnings[1] == "hashlookup: signatures bloom are old (unknown age)"

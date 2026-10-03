@@ -5,13 +5,17 @@ import os
 from pathlib import Path
 
 from usb_pasteur.config import LimitsConfig
-from usb_pasteur.engines import Engine, EngineResult, FakeEngine, FileInfo, Verdict
+from usb_pasteur.engines import EngineSpec, Verdict
 from usb_pasteur.scanner import FileResult, Scanner
+from usb_pasteur.workers import WorkerPool
+
+from .conftest import started_pool
+from .engines import MisbehavingEngine
 
 LIMITS = LimitsConfig(max_file_size=1000, max_files=1000, max_depth=10)
 
 
-def test_scan_tree(usb_tree: Path) -> None:
+def test_scan_tree(usb_tree: Path, fake_pool: WorkerPool) -> None:
     (usb_tree / "big.iso").write_bytes(b"0" * 2000)
     (usb_tree / "link").symlink_to("/etc/passwd")
     os.mkfifo(usb_tree / "fifo")
@@ -20,7 +24,7 @@ def test_scan_tree(usb_tree: Path) -> None:
     def on_progress(result: FileResult, done: int, total: int) -> None:
         progress.append((done, total))
 
-    summary = Scanner([FakeEngine()], 2, LIMITS).scan_tree(usb_tree, on_progress)
+    summary = Scanner(fake_pool, LIMITS).scan_tree(usb_tree, on_progress)
 
     verdicts = {f.rel_path: f.verdict for f in summary.files}
     assert verdicts == {
@@ -38,35 +42,30 @@ def test_scan_tree(usb_tree: Path) -> None:
     assert not summary.complete
 
 
-def test_complete_scan(usb_tree: Path) -> None:
-    summary = Scanner([FakeEngine()], 2, LIMITS).scan_tree(usb_tree)
+def test_complete_scan(usb_tree: Path, fake_pool: WorkerPool) -> None:
+    summary = Scanner(fake_pool, LIMITS).scan_tree(usb_tree)
     assert summary.complete
     assert summary.unscanned == []
 
 
 def test_engine_failure_is_an_error(tmp_path: Path) -> None:
-    class Broken(Engine):
-        name = "broken"
-
-        def scan(self, file: FileInfo) -> EngineResult:
-            raise RuntimeError("boom")
-
     (tmp_path / "file").write_text("x")
-    summary = Scanner([Broken()], 1, LIMITS).scan_tree(tmp_path)
+    with started_pool([EngineSpec("m", MisbehavingEngine, ("raise",))], 1) as pool:
+        summary = Scanner(pool, LIMITS).scan_tree(tmp_path)
     assert summary.files[0].verdict is Verdict.ERROR
     assert summary.files[0].results[0].error == "RuntimeError: boom"
     assert not summary.complete
 
 
-def test_many_files(tmp_path: Path) -> None:
+def test_many_files(tmp_path: Path, fake_pool: WorkerPool) -> None:
     for i in range(50):
         (tmp_path / f"f{i}").write_text(str(i))
-    summary = Scanner([FakeEngine()], 3, LIMITS).scan_tree(tmp_path)
+    summary = Scanner(fake_pool, LIMITS).scan_tree(tmp_path)
     assert summary.count(Verdict.CLEAN) == 50
 
 
-def test_file_info(usb_tree: Path) -> None:
-    summary = Scanner([FakeEngine()], 1, LIMITS).scan_tree(usb_tree)
+def test_file_info(usb_tree: Path, fake_pool: WorkerPool) -> None:
+    summary = Scanner(fake_pool, LIMITS).scan_tree(usb_tree)
     infos = {f.rel_path: f.info for f in summary.files}
     readme = infos["readme.txt"]
     assert readme is not None
@@ -79,8 +78,8 @@ def test_file_info(usb_tree: Path) -> None:
     assert report is not None and report.mime == "application/pdf"
 
 
-def test_missing_root(tmp_path: Path) -> None:
-    summary = Scanner([FakeEngine()], 1, LIMITS).scan_tree(tmp_path / "missing")
+def test_missing_root(tmp_path: Path, fake_pool: WorkerPool) -> None:
+    summary = Scanner(fake_pool, LIMITS).scan_tree(tmp_path / "missing")
     assert summary.files == []
     assert not summary.complete
     assert "cannot read the device" in summary.incomplete_reasons[0]
