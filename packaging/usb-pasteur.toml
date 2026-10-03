@@ -68,6 +68,13 @@ on_error = "block"
 # FAKE_SCAN mode only: simulated scan time per file, in seconds
 fake_delay = 0.0
 
+# Run each scan worker in a sandbox: bubblewrap (no network, a minimal file
+# system without the device), as sandbox_user without privileges, with a
+# system call filter. The kiosk opens the files and passes them to the
+# workers. Needs root, bwrap and setpriv: set it to false for development.
+sandbox = true
+sandbox_user = "usb-pasteur-scan"
+
 [limits]
 # Files bigger than this size (in bytes) are not scanned (default: 1 GiB)
 max_file_size = 1073741824

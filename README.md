@@ -65,7 +65,8 @@ The pandora-box code has been ported to the `usb_pasteur` package (`src/usb_past
 | `monitor.py` | USB detection with udev |
 | `device.py` | Hardened mounting (`ro,noexec,nosuid,nodev`, read-write only to clean) |
 | `inventory.py` | Device inventory: never follows links, never leaves the device, limits |
-| `scanner.py`, `workers.py` | Scan in supervised worker processes, timeouts and watchdog |
+| `scanner.py`, `workers.py`, `worker.py` | Scan in supervised worker processes, timeouts and watchdog |
+| `sandbox.py`, `seccomp.py`, `protocol.py` | Worker sandbox (bubblewrap, dedicated user, system call filter), validated JSON messages from the workers |
 | `pipeline.py`, `hashing.py`, `filetype.py` | Per file: hashes (SHA-256, SHA-1, MD5), libmagic type, engines |
 | `engines/` | Engine interface, MalwareBazaar, Hashlookup, ClamAV, YARA-X and fake engine |
 | `hashdb.py`, `bloom.py`, `clamd.py` | MalwareBazaar database, DCSO Bloom filter reader, clamd client |
@@ -134,6 +135,8 @@ Mounting a device requires root: adding your user to a group (such as `disk`) is
 
 The device is unmounted while the kiosk asks the user to confirm the cleaning, so that it can be removed safely. To clean, it is mounted again read-write; a file is only removed if its SHA-256 is still the one that was scanned (another device may have been inserted in the meantime). When the scan and the cleaning are over, the device is ejected (`device.eject`, with `eject`, or `udisksctl power-off` in auto-mount mode).
 
+The scan workers run in a sandbox by default (`scan.sandbox`): it needs root, `bwrap` (Debian package `bubblewrap`), `setpriv` and a `usb-pasteur-scan` user (`sudo systemd-sysusers packaging/sysusers/usb-pasteur.conf`). For development without them, set `sandbox = false` in `[scan]`.
+
 To work on the workflow without signatures, set `fake_scan = true` in `[kiosk]` (or use `--fake-scan`): only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
 
 #### Lint and tests
@@ -173,7 +176,7 @@ Goal: ship a ready-to-flash system image with the smallest possible attack surfa
 
 ### Current status
 
-A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox), but the analyzers are not sandboxed yet, and the production image has no signatures. See [docs/image.md](docs/image.md):
+A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox) and the scan workers run in a sandbox (bubblewrap, dedicated user, system call filter); the production image has no signatures yet. See [docs/image.md](docs/image.md):
 
 ```sh
 image/build.sh --profile test   # build the test image (Docker only)
@@ -221,7 +224,8 @@ Tasks:
 - [x] Devices mounted with `ro,noexec,nosuid,nodev` by the kiosk, no automount (no udisks in the image)
 - [x] Limited set of supported filesystems (vfat, exfat, ntfs3, ext4): the kiosk refuses to mount any other
 - [x] Hardened systemd services (`ProtectSystem`, `NoNewPrivileges`, seccomp filters; `PrivateNetwork` and `MemoryDenyWriteExecute` for clamd), exposure measured by `systemd-analyze security` in the virtual machine test
-- [ ] Each analyzer runs in a `bubblewrap` sandbox, without network, under a dedicated user
+- [x] Each scan worker runs in a `bubblewrap` sandbox, without network, under a dedicated user without capabilities, with a system call filter; the kiosk opens the files and passes their descriptors, and only accepts validated JSON from the workers
+- [ ] One worker per engine, so that a compromised engine cannot forge the results of another one
 - [ ] Audit log (`auditd`) for sensitive operations
 - [ ] Assessment with `lynis` and the ANSSI configuration recommendations for GNU/Linux systems
 

@@ -1,13 +1,16 @@
 # End-to-end test environment, based on the target system (Debian 13 trixie).
 # Run with tests/e2e/run.sh: the container must be privileged to use loop devices.
 # clamav-daemon is started by the tests with a test-only signature database.
+# The scan workers run in their sandbox (bubblewrap, setpriv, seccomp).
 FROM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         python3 python3-venv libmagic1 clamav-daemon \
         dosfstools exfatprogs e2fsprogs mount util-linux \
-    && rm -rf /var/lib/apt/lists/*
+        bubblewrap libseccomp2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home --shell /usr/sbin/nologin usb-pasteur-scan
 
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./

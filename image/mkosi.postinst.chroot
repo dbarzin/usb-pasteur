@@ -16,6 +16,8 @@ install -D -m 0644 "$PACKAGING/tmpfiles/usb-pasteur.conf" /usr/lib/tmpfiles.d/us
 # The root filesystem is read-only: tmpfiles cannot create the mount point
 install -d -m 0700 /media/usb-pasteur
 install -D -m 0644 "$PACKAGING/logrotate/usb-pasteur" /etc/logrotate.d/usb-pasteur
+# User of the sandboxed scan workers, created by systemd-sysusers at build time
+install -D -m 0644 "$PACKAGING/sysusers/usb-pasteur.conf" /usr/lib/sysusers.d/usb-pasteur.conf
 
 # clamd settings required by the ClamAV engine (docs/engines.md)
 clamd_option() {

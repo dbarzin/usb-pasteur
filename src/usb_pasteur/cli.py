@@ -14,6 +14,7 @@ from usb_pasteur.engines import EngineError
 from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines, build_pool
 from usb_pasteur.lock import AlreadyRunningError, InstanceLock
 from usb_pasteur.logs import setup_logging
+from usb_pasteur.sandbox import SandboxError
 from usb_pasteur.ui import ConsoleDisplay, Display
 
 
@@ -62,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.check_config:
             # Load every engine once in this process to check the configuration
             build_engines(config)
-    except (ConfigError, NoEngineError) as ex:
+    except (ConfigError, NoEngineError, SandboxError) as ex:
         print(f"usb-pasteur: {ex}", file=sys.stderr)
         return 2
     except EngineError as ex:

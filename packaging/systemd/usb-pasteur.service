@@ -34,9 +34,12 @@ CacheDirectoryMode=0700
 LogsDirectory=usb-pasteur
 LogsDirectoryMode=0750
 
-# Hardening. Mounting devices requires CAP_SYS_ADMIN; the full sandbox
-# (dedicated users, bubblewrap per analyzer, seccomp) comes with phase 2.
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN
+# Hardening. Mounting devices and starting the sandboxed scan workers
+# (bubblewrap, then setpriv to scan.sandbox_user) require CAP_SYS_ADMIN, the
+# capabilities to change user, and CAP_NET_ADMIN (bubblewrap brings up the
+# loopback interface of the network namespace of the workers). The workers
+# keep none of them.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_NET_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/media/usb-pasteur
@@ -49,13 +52,16 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
-RestrictNamespaces=yes
+# The scan workers get their own namespaces, but never a user namespace
+RestrictNamespaces=mnt pid net ipc uts cgroup
 RestrictRealtime=yes
-RestrictSUIDSGID=yes
+# No RestrictSUIDSGID: its filter refuses openat2(), which bubblewrap needs.
+# Setuid files cannot be created anyway: read-only root, /var and the devices
+# mounted nosuid.
 LockPersonality=yes
 # No MemoryDenyWriteExecute: YARA-X compiles its rules to native code at run
-# time (wasmtime) and fails with it. Phase 2 restores it for every process but
-# the sandboxed YARA analyzer.
+# time (wasmtime) and fails with it, and the filter would also apply to the
+# scan workers started by the kiosk. The workers are sandboxed instead.
 SystemCallArchitectures=native
 # Mounting the device needs the mount system calls
 SystemCallFilter=@system-service @mount

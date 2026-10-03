@@ -277,6 +277,38 @@ SYSCTL = {
 KERNEL_OPTIONS = ("init_on_free=1", "slab_nomerge", "vsyscall=none", "lockdown=confidentiality")
 
 
+def check_sandbox(vm: Machine) -> None:
+    step("scan workers are sandboxed")
+    # The Python processes of the workers (their bubblewrap parents run as root)
+    pids = vm.shell.run(
+        "for p in $(pgrep -f usb_pasteur.worker); do "
+        '[ "$(stat -c %U /proc/$p)" = usb-pasteur-scan ] && echo $p; done; true'
+    ).split()
+    check(len(pids) == 4, f"{len(pids)} sandboxed workers, 4 expected (scan.workers)")
+    init_net = vm.shell.run("readlink /proc/1/ns/net").strip()
+    for pid in pids:
+        status = dict(
+            line.split(":\t", 1)
+            for line in vm.shell.run(f"cat /proc/{pid}/status").splitlines()
+            if ":\t" in line
+        )
+        check(status["NoNewPrivs"].strip() == "1", f"worker {pid}: no_new_privs not set")
+        check(status["Seccomp"].strip() == "2", f"worker {pid}: no system call filter")
+        check(int(status["CapEff"], 16) == 0, f"worker {pid}: capabilities {status['CapEff']}")
+        check(int(status["CapBnd"], 16) == 0, f"worker {pid}: bounding set {status['CapBnd']}")
+        check(
+            vm.shell.run(f"readlink /proc/{pid}/ns/net").strip() != init_net,
+            f"worker {pid}: in the network namespace of the system",
+        )
+        for path in ("media", "var/lib/usb-pasteur", "var/log", "etc/usb-pasteur", "home"):
+            check(
+                not vm.shell.succeeds(f"test -e /proc/{pid}/root/{path}"),
+                f"worker {pid} sees /{path}",
+            )
+    print(f"{len(pids)} workers: user usb-pasteur-scan, no capabilities, no_new_privs, seccomp,")
+    print("no network, no device, no kiosk data in their file system")
+
+
 def check_hardening(vm: Machine) -> None:
     step("system hardening")
     values = dict(
@@ -424,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with Machine(image, workdir, SIGNING_CERTIFICATE) as vm:
                 check_boot(vm, args.boot_timeout)
+                check_sandbox(vm)
                 check_integrity(vm)
                 check_filesystems(vm)
                 check_infected_key(vm, key)

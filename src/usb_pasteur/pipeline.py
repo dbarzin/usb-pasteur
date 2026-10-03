@@ -19,7 +19,15 @@ from usb_pasteur.inventory import Entry, UnsafeFileError, open_entry
 from usb_pasteur.policy import KNOWN_FILE, aggregate_file
 from usb_pasteur.results import FileResult
 
-__all__ = ["KNOWN_FILE", "EngineCallback", "PipelineOptions", "run_engines", "scan_entry"]
+__all__ = [
+    "KNOWN_FILE",
+    "EngineCallback",
+    "PipelineOptions",
+    "error_result",
+    "run_engines",
+    "scan_entry",
+    "scan_fd",
+]
 
 # Called before each engine runs (the scan watchdog arms the engine timeout)
 EngineCallback = Callable[[Engine], None]
@@ -42,51 +50,72 @@ def scan_entry(
     options: PipelineOptions | None = None,
     on_engine: EngineCallback | None = None,
 ) -> FileResult:
-    options = options or PipelineOptions()
+    """Open an inventoried file safely, then scan it (see scan_fd)."""
     start = time.monotonic()
-    path = root / entry.rel_path
-
-    def error(detail: str) -> FileResult:
-        return FileResult(
-            path,
-            entry.size,
-            Verdict.ERROR,
-            detail=detail,
-            duration=time.monotonic() - start,
-            rel_path=entry.rel_path,
-        )
-
     try:
         with open_entry(root, entry) as fd:
-            hashes = hash_fd(fd)
-            if hashes.size != entry.size:
-                return error("file size changed while reading")
-            file_type = detector.identify(fd)
-            info = FileInfo(
-                rel_path=entry.rel_path,
-                size=hashes.size,
-                sha256=hashes.sha256,
-                sha1=hashes.sha1,
-                md5=hashes.md5,
-                mime=file_type.mime,
-                description=file_type.description,
-                fd=fd,
-            )
-            results = run_engines(info, engines, options, on_engine)
+            result = scan_fd(fd, entry, engines, detector, options, on_engine)
     except UnsafeFileError as ex:
-        return error(str(ex))
+        return error_result(entry, str(ex), start)
     except OSError as ex:
-        return error(f"cannot read: {ex.strerror or ex}")
+        return error_result(entry, f"cannot read: {ex.strerror or ex}", start)
+    return dataclasses.replace(result, path=root / entry.rel_path)
+
+
+def scan_fd(
+    fd: int,
+    entry: Entry,
+    engines: Sequence[Engine],
+    detector: FileTypeDetector,
+    options: PipelineOptions | None = None,
+    on_engine: EngineCallback | None = None,
+) -> FileResult:
+    """Scan a file opened by the kiosk: hash, identify, then run the engines.
+
+    The scan workers only get the descriptor of the file: they never open a
+    file of the device. The result path is relative to the mount point.
+    """
+    options = options or PipelineOptions()
+    start = time.monotonic()
+    try:
+        hashes = hash_fd(fd)
+        if hashes.size != entry.size:
+            return error_result(entry, "file size changed while reading", start)
+        file_type = detector.identify(fd)
+        info = FileInfo(
+            rel_path=entry.rel_path,
+            size=hashes.size,
+            sha256=hashes.sha256,
+            sha1=hashes.sha1,
+            md5=hashes.md5,
+            mime=file_type.mime,
+            description=file_type.description,
+            fd=fd,
+        )
+        results = run_engines(info, engines, options, on_engine)
+    except OSError as ex:
+        return error_result(entry, f"cannot read: {ex.strerror or ex}", start)
     content_engines = {e.name for e in engines if e.kind is EngineKind.CONTENT}
     verdict = aggregate_file(results, content_engines, options.min_malicious_engines)
     return FileResult(
-        path=path,
+        path=Path(entry.rel_path),
         size=entry.size,
         verdict=verdict,
         results=tuple(results),
         detail=_detail(verdict, results),
         duration=time.monotonic() - start,
         info=info,
+        rel_path=entry.rel_path,
+    )
+
+
+def error_result(entry: Entry, detail: str, start: float | None = None) -> FileResult:
+    return FileResult(
+        Path(entry.rel_path),
+        entry.size,
+        Verdict.ERROR,
+        detail=detail,
+        duration=0.0 if start is None else time.monotonic() - start,
         rel_path=entry.rel_path,
     )
 

@@ -55,11 +55,19 @@ class UsbDevice:
         )
 
 
-def mount_options(fs_type: str, read_only: bool, uid: int, gid: int) -> list[str]:
-    """Build hardened mount options: never execute, no setuid, no device files."""
+def mount_options(
+    fs_type: str, read_only: bool, uid: int, gid: int, reader_gid: int | None = None
+) -> list[str]:
+    """Build hardened mount options: never execute, no setuid, no device files.
+
+    reader_gid: group that may read the files (sandboxed scan workers).
+    """
     options = ["ro" if read_only else "rw", "noexec", "nosuid", "nodev"]
     if fs_type in _NO_UNIX_PERMISSIONS:
-        options += [f"uid={uid}", f"gid={gid}", "fmask=0177", "dmask=0077"]
+        if reader_gid is None:
+            options += [f"uid={uid}", f"gid={gid}", "fmask=0177", "dmask=0077"]
+        else:
+            options += [f"uid={uid}", f"gid={reader_gid}", "fmask=0137", "dmask=0027"]
         options.append("utf8" if fs_type == "vfat" else "iocharset=utf8")
     return options
 
@@ -73,11 +81,13 @@ class Mounter:
         allowed_filesystems: Sequence[str],
         use_sudo: bool = False,
         timeout: float = 60.0,
+        reader_gid: int | None = None,
     ) -> None:
         self.mount_point = mount_point
         self.allowed_filesystems = tuple(allowed_filesystems)
         self.use_sudo = use_sudo
         self.timeout = timeout
+        self.reader_gid = reader_gid
         self.device: UsbDevice | None = None
 
     def mount(self, device: UsbDevice, read_only: bool = True) -> None:
@@ -87,7 +97,9 @@ class Mounter:
             raise DeviceError(f"mount point does not exist: {self.mount_point}")
         if self.is_mounted():
             raise DeviceError(f"mount point already in use: {self.mount_point}")
-        options = mount_options(device.fs_type, read_only, os.getuid(), os.getgid())
+        options = mount_options(
+            device.fs_type, read_only, os.getuid(), os.getgid(), self.reader_gid
+        )
         self._run(
             MOUNT,
             "-t",

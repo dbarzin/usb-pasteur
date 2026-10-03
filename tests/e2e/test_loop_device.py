@@ -21,11 +21,11 @@ import pytest
 
 from usb_pasteur.bloom import write_filter
 from usb_pasteur.config import parse_config
-from usb_pasteur.device import Mounter, UsbDevice
+from usb_pasteur.device import UsbDevice
 from usb_pasteur.engines import FileInfo, Verdict
 from usb_pasteur.engines.clamav import ClamavEngine
 from usb_pasteur.hashdb import write_database
-from usb_pasteur.kiosk import Kiosk, build_pool
+from usb_pasteur.kiosk import Kiosk, build_pool, make_mounter
 from usb_pasteur.monitor import Action, DeviceEvent
 from usb_pasteur.report import load_schema
 
@@ -149,7 +149,7 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
         original_confirm(prompt)
 
     display.confirm = confirm  # type: ignore[method-assign]
-    mounter = Mounter(mount_point, config.device.allowed_filesystems)
+    mounter = make_mounter(config)
     source = ListSource([DeviceEvent(Action.ADD, usb_key)])
     with build_pool(config) as pool:
         Kiosk(config, display, source, pool, mounter).run()
@@ -194,6 +194,8 @@ def clamd() -> Iterator[Path]:
         pytest.skip("clamd not installed")
     # Short path: Unix socket paths are limited to 108 bytes
     folder = Path(tempfile.mkdtemp(prefix="clamd-"))
+    # Like /run/clamav: the sandboxed scan workers connect to the socket
+    folder.chmod(0o755)
     database = folder / "db"
     database.mkdir()
     (database / "usb-pasteur-test.hdb").write_text(
@@ -203,6 +205,7 @@ def clamd() -> Iterator[Path]:
     config = folder / "clamd.conf"
     config.write_text(
         f"LocalSocket {socket_path}\n"
+        "LocalSocketMode 666\n"
         f"DatabaseDirectory {database}\n"
         f"TemporaryDirectory {folder}\n"
         "Foreground yes\n"
@@ -261,7 +264,7 @@ def test_real_engines(fs_type: str, clamd: Path, tmp_path: Path) -> None:
     )
     display = RecordingDisplay()
     with make_key(tmp_path, fs_type, files) as key, build_pool(config) as pool:
-        mounter = Mounter(mount_point, config.device.allowed_filesystems)
+        mounter = make_mounter(config)
         Kiosk(config, display, ListSource([DeviceEvent(Action.ADD, key)]), pool, mounter).run()
         remaining = key_files(key.node, tmp_path)
 

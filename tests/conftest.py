@@ -127,7 +127,8 @@ def config(tmp_path: Path) -> Config:
         {
             "kiosk": {"name": "test", "fake_scan": True, "interface": "console"},
             "device": {"mount_point": str(tmp_path / "media")},
-            "scan": {"workers": 2},
+            # Sandboxed workers need root: see tests/e2e and the image tests
+            "scan": {"workers": 2, "sandbox": False},
             "quarantine": {"folder": str(tmp_path / "quarantine")},
             "report": {"folder": str(tmp_path / "reports")},
             "logging": {"file": ""},

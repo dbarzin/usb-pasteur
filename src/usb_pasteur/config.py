@@ -65,6 +65,10 @@ class ScanConfig:
     # "warn": the user is warned and the files are listed
     on_error: str = "block"
     fake_delay: float = 0.0
+    # Run the scan workers in a bubblewrap sandbox, as sandbox_user, without
+    # network and with a system call filter (needs root, bwrap and setpriv)
+    sandbox: bool = True
+    sandbox_user: str = "usb-pasteur-scan"
 
 
 @dataclass(frozen=True)
@@ -244,7 +248,17 @@ def parse_config(data: dict[str, Any]) -> Config:
     if "max_file_size" in scan:
         raise ConfigError("scan.max_file_size has moved to limits.max_file_size")
     _reject_unknown(
-        scan, {"workers", "file_timeout", "suspicious", "on_error", "fake_delay"}, "scan"
+        scan,
+        {
+            "workers",
+            "file_timeout",
+            "suspicious",
+            "on_error",
+            "fake_delay",
+            "sandbox",
+            "sandbox_user",
+        },
+        "scan",
     )
     workers = _get(scan, "scan", "workers", int, 4)
     if not 1 <= workers <= 64:
@@ -258,7 +272,11 @@ def parse_config(data: dict[str, Any]) -> Config:
         suspicious=_choice(scan, "scan", "suspicious", SUSPICIOUS_POLICIES, "block"),
         on_error=_choice(scan, "scan", "on_error", ERROR_POLICIES, "block"),
         fake_delay=fake_delay,
+        sandbox=_get(scan, "scan", "sandbox", bool, True),
+        sandbox_user=_get(scan, "scan", "sandbox_user", str, ScanConfig.sandbox_user),
     )
+    if not scan_cfg.sandbox_user.strip():
+        raise ConfigError("scan.sandbox_user must not be empty")
 
     limits = data.get("limits", {})
     _reject_unknown(limits, {"max_file_size", "max_files", "max_depth"}, "limits")

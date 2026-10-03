@@ -24,6 +24,7 @@ from usb_pasteur.report import (
     set_actions,
     write_report,
 )
+from usb_pasteur.sandbox import Sandbox
 from usb_pasteur.scanner import FileResult, Scanner, ScanSummary, describe, pipeline_options
 from usb_pasteur.signatures import find_stale
 from usb_pasteur.statemachine import State, StateMachine
@@ -49,24 +50,59 @@ def build_engines(config: Config) -> list[Engine]:
 
 
 def build_pool(config: Config) -> WorkerPool:
-    """The scan worker pool (not started); raise NoEngineError without engine."""
+    """The scan worker pool (not started).
+
+    Raise NoEngineError without engine, SandboxError when the workers cannot
+    be sandboxed.
+    """
+    specs = engine_specs(config)
+    sandbox = build_sandbox(config)
+    if sandbox is not None:
+        sandbox.check()
     return WorkerPool(
-        engine_specs(config),
+        specs,
         pipeline_options(config),
         config.scan.workers,
         config.scan.file_timeout,
+        sandbox=sandbox,
     )
+
+
+def build_sandbox(config: Config) -> Sandbox | None:
+    """The sandbox of the scan workers: the files of the enabled engines only."""
+    if not config.scan.sandbox:
+        return None
+    engines = config.engines
+    files: list[Path] = []
+    writable: list[Path] = []
+    if engines.malwarebazaar.enabled:
+        files.append(engines.malwarebazaar.database)
+    if engines.hashlookup.enabled:
+        files.append(engines.hashlookup.bloom)
+    if engines.clamav.enabled:
+        files.append(engines.clamav.socket)
+    if engines.yara.enabled:
+        files += [rule_set.path for rule_set in engines.yara.rules]
+        if engines.yara.cache_dir is not None:
+            writable.append(engines.yara.cache_dir)
+    # The folder of each file: signature manifests, clamd socket re-created
+    read_only = {path if path.is_dir() else path.parent for path in files}
+    return Sandbox(config.scan.sandbox_user, tuple(sorted(read_only)), tuple(writable))
 
 
 def make_mounter(config: Config) -> Mounter:
     device = config.device
     if device.auto_mount:
         return SystemMountWatcher(device.allowed_filesystems, device.auto_mount_wait)
+    # Sandboxed workers read the files through their group (YARA-X reopens
+    # the descriptor it gets)
+    sandbox = build_sandbox(config)
     return Mounter(
         device.mount_point,
         device.allowed_filesystems,
         use_sudo=device.use_sudo,
         timeout=device.command_timeout,
+        reader_gid=None if sandbox is None else sandbox.ids()[1],
     )
 
 

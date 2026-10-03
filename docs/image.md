@@ -7,8 +7,7 @@ container (`image/Dockerfile`: mkosi, QEMU, OVMF), so the developer only needs
 Docker.
 
 > [!WARNING]
-> The analyzers are not sandboxed yet, the image is signed
-> with development keys only, and the production image has no signatures yet
+> The image is signed with development keys only, and the production image has no signatures yet
 > (the kiosk refuses to start until signature updates exist).
 > See the phase 2 tasks in the [README](../README.md#phase-2--minimal-hardened-image).
 
@@ -155,13 +154,47 @@ After the ANSSI configuration recommendations for GNU/Linux systems:
   without JIT); it runs as the `clamav` user.
 - **Kiosk service** (`packaging/systemd/usb-pasteur.service`): read-only
   system, system call filter, limited capabilities. It keeps `AF_NETLINK`
-  (udev events) and cannot have `MemoryDenyWriteExecute` while the YARA-X
-  workers (which compile rules to native code) run inside it: the analyzer
-  sandbox is the next step.
+  (udev events), the capabilities needed to start the worker sandbox
+  (namespaces, change of user, loopback interface of the workers) and
+  cannot have `MemoryDenyWriteExecute` or `RestrictSUIDSGID`: the first one
+  would also apply to the YARA-X workers, which compile rules to native
+  code, the second one refuses a system call bubblewrap needs.
+
+## Scan worker sandbox
+
+The scan workers parse hostile files with several engines (libmagic, YARA-X,
+the clamd client...): they are assumed compromisable (`scan.sandbox`,
+`src/usb_pasteur/sandbox.py`).
+
+- **No access to the device**: the kiosk opens each file safely (no link
+  followed, the file of the inventory) and passes the open descriptor to a
+  worker, which never opens a file of the device. The key is mounted with a
+  group of the worker user (vfat, exFAT, NTFS): YARA-X reopens the
+  descriptor it gets.
+- **bubblewrap**: new PID, IPC, UTS, cgroup and network namespaces (no
+  network interface but loopback); a file system holding only `/usr`, a few
+  files of `/etc`, the signature folders of the enabled engines
+  (read-only), the YARA-X cache and the clamd socket folder: no device
+  mount point, no reports, quarantine, logs or configuration.
+- **Dedicated user** `usb-pasteur-scan` (`packaging/sysusers/`), switched to
+  by `setpriv`: no capability, no supplementary group, `no_new_privs`.
+- **System call filter** (`src/usb_pasteur/seccomp.py`), installed once
+  the engines are loaded: no program execution, debugging, mounts,
+  namespaces, eBPF, kernel modules, io_uring, network sockets...
+- **Untrusted answers**: workers answer in JSON (never pickle), limited in
+  size and validated (`src/usb_pasteur/protocol.py`); the path and size of
+  the file always come from the kiosk. A malformed answer kills the worker
+  and the file is reported as an error.
+
+bubblewrap runs as root (the kiosk service), so unprivileged user namespaces
+stay disabled. The workers of one kiosk still share their engines: a
+compromised engine could forge the result of another engine of the same
+worker.
 
 The virtual machine test checks these settings and prints the exposure of
 the services measured by `systemd-analyze security` (0 to 10, lower is
-better): about 1.6 for clamd, 2.7 for the kiosk, 2.8 for USBGuard.
+better): about 1.6 for clamd, 3.8 for the kiosk (which starts the worker
+sandbox), 2.8 for USBGuard.
 
 ## Dependencies
 
@@ -196,8 +229,10 @@ controller. It plays the whole user workflow, through QMP and the shell on
 the virtio console:
 
 1. the kiosk starts with its four engines and no systemd unit fails;
-2. Secure Boot is enabled, the kernel is locked down and the root filesystem
-   is on dm-verity;
+2. the four scan workers run in their sandbox (user, capabilities,
+   `no_new_privs`, seccomp, network namespace, no device or kiosk data in
+   their file system); Secure Boot is enabled, the kernel is locked down and
+   the root filesystem is on dm-verity;
 3. the root filesystem is read-only EROFS, and `/var` was grown to fill the
    8 GB disk of the machine;
 4. an emulated USB key (a vfat disk image holding the corpus) is inserted,

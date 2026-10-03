@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from usb_pasteur.cli import apply_overrides, main, parse_args
 from usb_pasteur.config import parse_config
+
+# Sandboxed scan workers need root (see test_sandbox_needs_root)
+NO_SANDBOX = "[scan]\nsandbox = false\n"
 
 
 def write(tmp_path: Path, content: str) -> Path:
@@ -15,9 +19,16 @@ def write(tmp_path: Path, content: str) -> Path:
 
 
 def test_check_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    path = write(tmp_path, "[kiosk]\nfake_scan = true\n")
+    path = write(tmp_path, "[kiosk]\nfake_scan = true\n" + NO_SANDBOX)
     assert main(["--config", str(path), "--check-config"]) == 0
     assert "OK" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="checks the error of a user without root")
+def test_sandbox_needs_root(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = write(tmp_path, "[kiosk]\nfake_scan = true\n")
+    assert main(["--config", str(path), "--check-config"]) == 2
+    assert "scan sandbox needs root (set scan.sandbox = false" in capsys.readouterr().err
 
 
 def test_invalid_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -30,7 +41,7 @@ def test_refuses_to_start_without_engine_data(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Every engine is enabled by default: without signatures, the kiosk refuses to start
-    path = write(tmp_path, "")
+    path = write(tmp_path, NO_SANDBOX)
     assert main(["--config", str(path), "--check-config"]) == 2
     assert "cannot load an enabled engine: malwarebazaar" in capsys.readouterr().err
     assert main(["--config", str(path), "--check-config", "--fake-scan"]) == 0

@@ -1,9 +1,15 @@
 """Scan worker processes, supervised by a watchdog.
 
-Each worker is a long-lived process that builds and loads its own engines
-once, then scans files one at a time. Engines therefore share no state, and a
-crash only affects the file being scanned. In phase 2, workers will run in a
-bubblewrap sandbox under a dedicated user.
+Each worker is a long-lived process (usb_pasteur.worker) that builds and
+loads its own engines once, then scans files one at a time. Engines therefore
+share no state, and a crash only affects the file being scanned. With
+scan.sandbox, workers run in a bubblewrap sandbox under a dedicated user
+(usb_pasteur.sandbox).
+
+The kiosk opens each file (usb_pasteur.inventory.open_entry) and passes its
+descriptor to a worker, which never opens a file of the device. Workers are
+assumed compromisable: their answers are validated JSON
+(usb_pasteur.protocol); a malformed answer is handled like a crash.
 
 concurrent.futures.ProcessPoolExecutor is not used: it cannot cancel a running
 task, and a killed worker breaks the whole pool. Here, the supervisor (the
@@ -22,34 +28,38 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import multiprocessing
 import multiprocessing.connection
-import signal
+import os
+import socket
+import subprocess
+import sys
 import time
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from multiprocessing.process import BaseProcess
+from multiprocessing.reduction import send_handle
 from pathlib import Path
 from typing import Any
 
-from usb_pasteur.engines import (
-    Engine,
-    EngineError,
-    EngineKind,
-    EngineResult,
-    EngineSpec,
-    SignatureInfo,
-    Verdict,
+from usb_pasteur.engines import EngineError, EngineResult, EngineSpec, Verdict
+from usb_pasteur.inventory import Entry, UnsafeFileError, open_entry
+from usb_pasteur.logs import get_logger, log_event
+from usb_pasteur.pipeline import PipelineOptions
+from usb_pasteur.protocol import (
+    MAX_MESSAGE_SIZE,
+    EngineInfo,
+    ProtocolError,
+    decode,
+    decode_engines,
+    decode_result,
+    describe_engine,
 )
-from usb_pasteur.engines.registry import load_engines
-from usb_pasteur.filetype import FileTypeDetector
-from usb_pasteur.inventory import Entry
-from usb_pasteur.logs import LOGGER_NAME, get_logger, log_event
-from usb_pasteur.pipeline import PipelineOptions, scan_entry
 from usb_pasteur.results import FileResult
+from usb_pasteur.sandbox import Sandbox
 from usb_pasteur.text import escape
+
+__all__ = ["EngineInfo", "WorkerPool", "describe_engine"]
 
 logger = get_logger("workers")
 
@@ -58,72 +68,6 @@ logger = get_logger("workers")
 ENGINE_GRACE = 5.0
 # Maximum time for a worker to load its engines
 START_TIMEOUT = 600.0
-# Modules imported once by the fork server, before the workers are forked
-_PRELOAD = ["usb_pasteur.workers"]
-
-
-@dataclass(frozen=True)
-class EngineInfo:
-    """Description of a loaded engine, for logs and scan reports."""
-
-    name: str
-    kind: EngineKind
-    version: str
-    timeout: float
-    signatures: tuple[SignatureInfo, ...] = ()
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-def describe_engine(engine: Engine) -> EngineInfo:
-    return EngineInfo(
-        name=engine.name,
-        kind=engine.kind,
-        version=engine.version(),
-        timeout=engine.timeout,
-        signatures=tuple(engine.signature_info()),
-        extra=engine.extra_info(),
-    )
-
-
-# -- worker side -----------------------------------------------------------------
-
-
-def _worker_main(
-    conn: multiprocessing.connection.Connection,
-    specs: tuple[EngineSpec, ...],
-    options: PipelineOptions,
-) -> None:
-    # Ctrl-C is handled by the kiosk process, which stops the workers
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    # Workers do not log: their stderr may be the kiosk screen. Everything
-    # they find is sent to the kiosk process, which logs it.
-    worker_logger = logging.getLogger(LOGGER_NAME)
-    worker_logger.handlers = [logging.NullHandler()]
-    worker_logger.propagate = False
-    try:
-        engines = load_engines(specs)
-        detector = FileTypeDetector()
-    except Exception as ex:
-        conn.send(("load_failed", str(ex)))
-        return
-    conn.send(("ready", [describe_engine(e) for e in engines]))
-    while True:
-        try:
-            message = conn.recv()
-        except (EOFError, OSError):
-            return
-        if message[0] == "stop":
-            return
-        if message[0] == "info":
-            conn.send(("info", [describe_engine(e) for e in engines]))
-        elif message[0] == "scan":
-            _, task_id, root, entry = message
-
-            def on_engine(engine: Engine, task_id: int = task_id) -> None:
-                conn.send(("engine", task_id, engine.name, engine.timeout))
-
-            result = scan_entry(Path(root), entry, engines, detector, options, on_engine)
-            conn.send(("result", task_id, result))
 
 
 # -- supervisor side ---------------------------------------------------------------
@@ -148,7 +92,7 @@ class _Task:
 
 @dataclass
 class _Worker:
-    process: BaseProcess
+    process: subprocess.Popen[bytes]
     conn: multiprocessing.connection.Connection
     state: _State = _State.STARTING
     started: float = field(default_factory=time.monotonic)
@@ -169,6 +113,7 @@ class WorkerPool:
         file_timeout: float,
         engine_grace: float = ENGINE_GRACE,
         start_timeout: float = START_TIMEOUT,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self.specs = tuple(specs)
         self.options = options
@@ -176,8 +121,7 @@ class WorkerPool:
         self.file_timeout = file_timeout
         self.engine_grace = engine_grace
         self.start_timeout = start_timeout
-        self._context = multiprocessing.get_context("forkserver")
-        self._context.set_forkserver_preload(_PRELOAD)
+        self.sandbox = sandbox
         self._workers: list[_Worker] = []
         self._next_task = 0
         self.engines: list[EngineInfo] = []
@@ -191,6 +135,8 @@ class WorkerPool:
 
         Raise EngineError when an engine cannot be loaded.
         """
+        if self.sandbox is not None:
+            self.sandbox.prepare()
         self._workers = [self._spawn() for _ in range(self.size)]
         deadline = time.monotonic() + self.start_timeout
         while starting := [w for w in self._workers if w.state is _State.STARTING]:
@@ -225,7 +171,8 @@ class WorkerPool:
             with contextlib.suppress(OSError, ValueError):
                 worker.conn.send(("stop",))
         for worker in self._workers:
-            worker.process.join(timeout=2)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                worker.process.wait(timeout=2)
             self._kill(worker)
         self._workers = []
 
@@ -239,33 +186,57 @@ class WorkerPool:
     @property
     def pids(self) -> list[int]:
         """Process ids of the running workers (diagnostics and tests)."""
-        return [w.process.pid for w in self._workers if w.process.pid is not None]
+        return [w.process.pid for w in self._workers]
 
     def _spawn(self) -> _Worker:
-        parent, child = self._context.Pipe(duplex=True)
-        process = self._context.Process(
-            target=_worker_main,
-            args=(child, self.specs, self.options),
-            name="usb-pasteur-scan",
-            daemon=True,
-        )
-        process.start()
-        # Close our copy of the child end: EOF then signals a dead worker
-        child.close()
-        return _Worker(process, parent)
+        parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        command = [sys.executable, "-m", "usb_pasteur.worker", str(child.fileno())]
+        if self.sandbox is not None:
+            command = self.sandbox.wrap(command)
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            # The modules of the engine factories (tests and development)
+            "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+        }
+        with child:
+            # stdout may be the kiosk screen. Workers never write, but errors
+            # of bubblewrap or Python go to stderr: the journal of the service
+            process = subprocess.Popen(  # noqa: S603  (fixed command)
+                command,
+                pass_fds=(child.fileno(),),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                env=env,
+            )
+        # Our copy of the child end is closed: EOF then signals a dead worker
+        conn = multiprocessing.connection.Connection(parent.detach())
+        worker = _Worker(process, conn)
+        # A dead worker is reported when its first message is read
+        with contextlib.suppress(OSError):
+            conn.send(("init", self.specs, self.options, self.sandbox is not None))
+        return worker
+
+    def _receive(self, worker: _Worker) -> dict[str, Any]:
+        """Read and decode a message: ProtocolError, EOFError or OSError."""
+        return decode(worker.conn.recv_bytes(MAX_MESSAGE_SIZE))
 
     def _receive_ready(self, worker: _Worker) -> str | None:
         """Handle the first message of a worker; return an error message."""
         try:
-            message = worker.conn.recv()
+            message = self._receive(worker)
+            if message["type"] == "load_failed":
+                return str(message.get("error"))[:1000]
+            if message["type"] != "ready":
+                return f"unexpected message from a scan worker: {message['type'][:100]}"
+            engines = decode_engines(message.get("engines"))
         except (EOFError, OSError):
             return f"scan worker died while loading engines (exit code {self._exit(worker)})"
-        if message[0] == "load_failed":
-            return str(message[1])
-        if message[0] != "ready":
-            return f"unexpected message from a scan worker: {message[0]}"
+        except ProtocolError as ex:
+            return f"invalid message from a scan worker: {ex}"
         worker.state = _State.IDLE
-        self.engines = list(message[1])
+        self.engines = engines
         return None
 
     # -- information ------------------------------------------------------------
@@ -278,11 +249,11 @@ class WorkerPool:
             try:
                 worker.conn.send(("info",))
                 if worker.conn.poll(30):
-                    message = worker.conn.recv()
-                    if message[0] == "info":
-                        self.engines = list(message[1])
+                    message = self._receive(worker)
+                    if message["type"] == "info":
+                        self.engines = decode_engines(message.get("engines"))
                         break
-            except (EOFError, OSError):
+            except (EOFError, OSError, ProtocolError):
                 continue
         return self.engines
 
@@ -293,10 +264,14 @@ class WorkerPool:
         queue = deque(entries)
         while queue or any(w.state is _State.BUSY for w in self._workers):
             for worker in self._workers:
-                if worker.state is _State.IDLE and not worker.process.is_alive():
+                if worker.state is _State.IDLE and worker.process.poll() is not None:
                     self._kill(worker)
                     self._restart(worker)
-                if worker.state is _State.IDLE and queue and self._assign(worker, root, queue[0]):
+                if (
+                    worker.state is _State.IDLE
+                    and queue
+                    and self._assign(worker, root, queue[0], on_result)
+                ):
                     queue.popleft()
             if all(w.state is _State.FAILED for w in self._workers):
                 # No worker can load its engines any more: fail closed
@@ -305,16 +280,26 @@ class WorkerPool:
                 return
             self._wait(root, on_result)
 
-    def _assign(self, worker: _Worker, root: Path, entry: Entry) -> bool:
+    def _assign(self, worker: _Worker, root: Path, entry: Entry, on_result: ResultCallback) -> bool:
+        """Open the file and pass it to the worker; return whether the entry is done."""
         self._next_task += 1
         task = _Task(self._next_task, entry, time.monotonic() + self.file_timeout)
         try:
-            worker.conn.send(("scan", task.task_id, str(root), entry))
-        except OSError:
-            # The worker died while idle: the entry stays in the queue
-            self._kill(worker)
-            self._restart(worker)
-            return False
+            with open_entry(root, entry) as fd:
+                try:
+                    worker.conn.send(("scan", task.task_id, entry))
+                    send_handle(worker.conn, fd, worker.process.pid)
+                except OSError:
+                    # The worker died while idle: the entry stays in the queue
+                    self._kill(worker)
+                    self._restart(worker)
+                    return False
+        except UnsafeFileError as ex:
+            on_result(self._error_result(root, entry, str(ex)))
+            return True
+        except OSError as ex:
+            on_result(self._error_result(root, entry, f"cannot read: {ex.strerror or ex}"))
+            return True
         worker.state = _State.BUSY
         worker.task = task
         return True
@@ -348,21 +333,34 @@ class WorkerPool:
                 self._kill(worker)
                 worker.state = _State.FAILED
             return
+        task = worker.task
         try:
-            message = worker.conn.recv()
+            message = self._receive(worker)
+            if task is None or message.get("task") != task.task_id:
+                raise ProtocolError("message for another task")
+            if message["type"] == "engine":
+                # The timeout is the one reported at startup, never a new one
+                engine = self._engine(message.get("engine"))
+                task.engine = engine.name
+                task.engine_deadline = time.monotonic() + engine.timeout + self.engine_grace
+            elif message["type"] == "result":
+                names = {e.name for e in self.engines}
+                result = decode_result(message.get("result"), root, task.entry, names)
+                worker.task = None
+                worker.state = _State.IDLE
+                on_result(result)
+            else:
+                raise ProtocolError(f"unexpected message: {message['type'][:100]}")
         except (EOFError, OSError):
             self._crashed(worker, root, on_result)
-            return
-        task = worker.task
-        if task is None or message[1] != task.task_id:
-            return
-        if message[0] == "engine":
-            task.engine = message[2]
-            task.engine_deadline = time.monotonic() + float(message[3]) + self.engine_grace
-        elif message[0] == "result":
-            worker.task = None
-            worker.state = _State.IDLE
-            on_result(message[2])
+        except ProtocolError as ex:
+            self._crashed(worker, root, on_result, f"invalid message ({ex})")
+
+    def _engine(self, name: object) -> EngineInfo:
+        for engine in self.engines:
+            if engine.name == name:
+                return engine
+        raise ProtocolError("unknown engine")
 
     def _expire(self, worker: _Worker, root: Path, on_result: ResultCallback) -> None:
         task = worker.task
@@ -384,9 +382,16 @@ class WorkerPool:
         on_result(self._error_result(root, task.entry, reason, task.engine))
         self._restart(worker)
 
-    def _crashed(self, worker: _Worker, root: Path, on_result: ResultCallback) -> None:
+    def _crashed(
+        self, worker: _Worker, root: Path, on_result: ResultCallback, error: str = ""
+    ) -> None:
         task = worker.task
-        reason = f"scan worker crashed (exit code {self._exit(worker)})"
+        if error:
+            # A worker sending malformed messages may be compromised: killed
+            self._kill(worker)
+            reason = f"scan worker killed: {error}"
+        else:
+            reason = f"scan worker crashed (exit code {self._exit(worker)})"
         if task is not None and task.engine:
             reason += f" in engine {task.engine}"
         log_event(logger, "worker_crashed", logging.ERROR, reason=reason)
@@ -406,18 +411,18 @@ class WorkerPool:
 
     @staticmethod
     def _kill(worker: _Worker) -> None:
-        with contextlib.suppress(OSError, ValueError):
-            if worker.process.is_alive():
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            if worker.process.poll() is None:
                 worker.process.kill()
-            worker.process.join(timeout=5)
+            worker.process.wait(timeout=5)
         with contextlib.suppress(OSError):
             worker.conn.close()
 
     @staticmethod
     def _exit(worker: _Worker) -> int | None:
-        with contextlib.suppress(OSError, ValueError):
-            worker.process.join(timeout=1)
-        return worker.process.exitcode
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            worker.process.wait(timeout=1)
+        return worker.process.returncode
 
     @staticmethod
     def _error_result(root: Path, entry: Entry, reason: str, engine: str = "") -> FileResult:

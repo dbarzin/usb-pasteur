@@ -12,7 +12,7 @@ from usb_pasteur.results import FileResult
 from usb_pasteur.workers import WorkerPool
 
 from .conftest import FAKE, started_pool
-from .engines import FailingLoadEngine, MisbehavingEngine
+from .engines import CompromisedEngine, FailingLoadEngine, MisbehavingEngine
 
 
 def make_files(root: Path, names: list[str]) -> None:
@@ -121,3 +121,37 @@ def test_every_worker_crashes(tmp_path: Path) -> None:
     with started_pool(misbehaving("crash"), workers=2) as pool:
         results = run(pool, tmp_path)
     assert all(r.verdict is Verdict.ERROR for r in results.values())
+
+
+@pytest.mark.parametrize("payload", ["clean", "pickle", "garbage"])
+def test_compromised_worker(tmp_path: Path, payload: str) -> None:
+    """Forged messages of a worker are never trusted, and never unpickled."""
+    root = tmp_path / "key"
+    root.mkdir()
+    make_files(root, ["evil.txt"])
+    proof = tmp_path / "proof"
+    specs = [
+        EngineSpec("fake", FakeEngine),
+        EngineSpec("compromised", CompromisedEngine, (payload, str(proof))),
+    ]
+    with started_pool(specs, workers=1) as pool:
+        results = run(pool, root)
+        assert pool.restarts == 1
+    result = results["evil.txt"]
+    assert result.verdict is Verdict.ERROR
+    assert result.detail.startswith("scan worker killed: invalid message")
+    assert not proof.exists()
+
+
+def test_unsafe_file_is_not_passed_to_a_worker(tmp_path: Path) -> None:
+    make_files(tmp_path, ["a.txt"])
+    entries = take_inventory(tmp_path, 1000, 10, 10**6).files
+    (tmp_path / "a.txt").unlink()
+    (tmp_path / "a.txt").write_text("replaced since the inventory")
+    results: list[FileResult] = []
+    with started_pool(FAKE) as pool:
+        pool.scan(tmp_path, entries, results.append)
+    [result] = results
+    assert result.verdict is Verdict.ERROR
+    # Replaced (new inode) or, when the inode is reused, a new size
+    assert result.detail.endswith("since the inventory")
