@@ -52,9 +52,12 @@ Offline list of SHA-256 hashes of known malware, from
 
 - **Input**: the full SHA-256 export. Downloading it requires a free abuse.ch
   Auth-Key ([auth.abuse.ch](https://auth.abuse.ch/)), sent in the `Auth-Key`
-  HTTP header. The converter accepts the zip archive or the text file inside:
-  one hexadecimal SHA-256 per line, lines starting with `#` are comments. Any
-  other line is an error: a malformed export is never partially loaded.
+  HTTP header, from `https://bazaar.abuse.ch/export/txt/sha256/full/`. The
+  export is a zip archive holding `full_sha256.txt`: a `#` comment header,
+  then one lower case hexadecimal SHA-256 per line. The converter accepts the
+  zip archive or the text file. Any other line is an error: a malformed export
+  is never partially loaded. In October 2026, the export held 1.1 million
+  hashes, a 37 MB database.
 - **Conversion**:
   `python -m usb_pasteur.hashdb build full_sha256.zip malwarebazaar.sha256.bin`
   (`python -m usb_pasteur.hashdb info <database>` describes a database).
