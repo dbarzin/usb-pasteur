@@ -9,17 +9,31 @@ from __future__ import annotations
 import dataclasses
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
-from usb_pasteur.engines import Engine, EngineResult, FileInfo, Verdict, aggregate
+from usb_pasteur.engines import Engine, EngineKind, EngineResult, FileInfo, Verdict, aggregate
 from usb_pasteur.filetype import FileTypeDetector
 from usb_pasteur.hashing import hash_fd
 from usb_pasteur.inventory import Entry, UnsafeFileError, open_entry
 from usb_pasteur.results import FileResult
 
+KNOWN_FILE = "known file (hashlookup)"
+
+
+@dataclass(frozen=True)
+class PipelineOptions:
+    # Skip the content engines for files known by a hash engine (hashlookup),
+    # unless a hash engine reports them as malicious
+    skip_content_for_known: bool = True
+
 
 def scan_entry(
-    root: Path, entry: Entry, engines: Sequence[Engine], detector: FileTypeDetector
+    root: Path,
+    entry: Entry,
+    engines: Sequence[Engine],
+    detector: FileTypeDetector,
+    options: PipelineOptions | None = None,
 ) -> FileResult:
     start = time.monotonic()
     path = root / entry.rel_path
@@ -50,7 +64,7 @@ def scan_entry(
                 description=file_type.description,
                 fd=fd,
             )
-            results = run_engines(info, engines)
+            results = run_engines(info, engines, options or PipelineOptions())
     except UnsafeFileError as ex:
         return error(str(ex))
     except OSError as ex:
@@ -66,10 +80,24 @@ def scan_entry(
     )
 
 
-def run_engines(info: FileInfo, engines: Sequence[Engine]) -> list[EngineResult]:
-    results: list[EngineResult] = []
+def run_engines(
+    info: FileInfo, engines: Sequence[Engine], options: PipelineOptions
+) -> list[EngineResult]:
+    """Run the hash engines, then the content engines.
+
+    A malicious hash always wins over a "known file" answer: the content
+    engines are only skipped for known files that no engine reports.
+    """
+    results = [run_engine(e, info) for e in engines if e.kind is EngineKind.HASH]
+    malicious = any(r.verdict is Verdict.MALICIOUS for r in results)
+    known = any(r.facts.get("known") is True for r in results)
     for engine in engines:
-        results.append(run_engine(engine, info))
+        if engine.kind is EngineKind.HASH:
+            continue
+        if known and not malicious and options.skip_content_for_known:
+            results.append(EngineResult(engine.name, Verdict.SKIPPED, reason=KNOWN_FILE))
+        else:
+            results.append(run_engine(engine, info))
     return results
 
 

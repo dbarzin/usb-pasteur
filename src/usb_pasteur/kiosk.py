@@ -9,11 +9,12 @@ from pathlib import Path
 
 from usb_pasteur.config import Config
 from usb_pasteur.device import DeviceError, Mounter, UsbDevice
-from usb_pasteur.engines import Engine, FakeEngine
+from usb_pasteur.engines import Engine
+from usb_pasteur.engines.registry import NoEngineError, engine_specs, load_engines
 from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.monitor import Action, DeviceSource
 from usb_pasteur.quarantine import Quarantine
-from usb_pasteur.scanner import FileResult, Scanner, ScanSummary, describe
+from usb_pasteur.scanner import FileResult, Scanner, ScanSummary, describe, pipeline_options
 from usb_pasteur.statemachine import State, StateMachine
 from usb_pasteur.ui import Display
 
@@ -23,17 +24,12 @@ logger = get_logger("kiosk")
 _MAX_LISTED = 10
 
 
-class NoEngineError(Exception):
-    pass
+__all__ = ["Kiosk", "NoEngineError", "build_engines"]
 
 
 def build_engines(config: Config) -> list[Engine]:
-    if config.kiosk.fake_scan:
-        return [FakeEngine(delay=config.scan.fake_delay)]
-    # Real engines (Hashlookup, MalwareBazaar, ClamAV, YARA-X) come in phase 1
-    raise NoEngineError(
-        "no detection engine is available yet: set kiosk.fake_scan = true for development"
-    )
+    """Load the enabled engines: raise NoEngineError or EngineError on failure."""
+    return load_engines(engine_specs(config))
 
 
 class Kiosk:
@@ -48,7 +44,9 @@ class Kiosk:
         self.config = config
         self.display = display
         self.source = source
-        self.scanner = Scanner(engines, config.scan.workers, config.limits)
+        self.scanner = Scanner(
+            engines, config.scan.workers, config.limits, pipeline_options(config)
+        )
         self.mounter = mounter or Mounter(
             config.device.mount_point,
             config.device.allowed_filesystems,

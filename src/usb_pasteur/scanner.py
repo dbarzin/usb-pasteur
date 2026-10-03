@@ -8,16 +8,23 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 
-from usb_pasteur.config import LimitsConfig
+from usb_pasteur.config import Config, LimitsConfig
 from usb_pasteur.engines import Engine, Verdict
 from usb_pasteur.filetype import FileTypeDetector
 from usb_pasteur.inventory import UNREADABLE, Skipped, take_inventory
 from usb_pasteur.logs import get_logger, log_event
-from usb_pasteur.pipeline import scan_entry
+from usb_pasteur.pipeline import PipelineOptions, scan_entry
 from usb_pasteur.results import FileResult, ScanSummary
 from usb_pasteur.text import escape, human_size, printable
 
-__all__ = ["FileResult", "ProgressCallback", "ScanSummary", "Scanner", "describe"]
+__all__ = [
+    "FileResult",
+    "ProgressCallback",
+    "ScanSummary",
+    "Scanner",
+    "describe",
+    "pipeline_options",
+]
 
 logger = get_logger("scanner")
 
@@ -29,10 +36,17 @@ ProgressCallback = Callable[[FileResult, int, int], None]
 class Scanner:
     """Inventory a directory tree, then scan its regular files in a thread pool."""
 
-    def __init__(self, engines: Sequence[Engine], workers: int, limits: LimitsConfig) -> None:
+    def __init__(
+        self,
+        engines: Sequence[Engine],
+        workers: int,
+        limits: LimitsConfig,
+        options: PipelineOptions | None = None,
+    ) -> None:
         self.engines = list(engines)
         self.workers = workers
         self.limits = limits
+        self.options = options or PipelineOptions()
         self._detector = FileTypeDetector()
 
     def scan_tree(self, root: Path, on_progress: ProgressCallback | None = None) -> ScanSummary:
@@ -76,7 +90,9 @@ class Scanner:
         pending: set[Future[FileResult]] = set()
         with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="scan") as pool:
             for entry in inventory.files:
-                pending.add(pool.submit(scan_entry, root, entry, self.engines, self._detector))
+                pending.add(
+                    pool.submit(scan_entry, root, entry, self.engines, self._detector, self.options)
+                )
                 if len(pending) >= max_pending:
                     done, pending = wait(pending, return_when=FIRST_COMPLETED)
                     for future in done:
@@ -125,6 +141,13 @@ def _skipped_result(root: Path, skipped: Skipped) -> FileResult:
         detail=skipped.reason,
         rel_path=skipped.rel_path,
         incomplete=skipped.incomplete,
+    )
+
+
+def pipeline_options(config: Config) -> PipelineOptions:
+    hashlookup = config.engines.hashlookup
+    return PipelineOptions(
+        skip_content_for_known=hashlookup.enabled and hashlookup.skip_content_engines
     )
 
 

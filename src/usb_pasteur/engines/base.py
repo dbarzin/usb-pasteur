@@ -130,6 +130,10 @@ class EngineSpec:
     def create(self) -> Engine:
         return self.factory(*self.args)
 
+    def factory_kind(self) -> EngineKind:
+        kind = getattr(self.factory, "kind", EngineKind.CONTENT)
+        return kind if isinstance(kind, EngineKind) else EngineKind.CONTENT
+
 
 def aggregate(results: Iterable[EngineResult]) -> Verdict:
     """Combine engine results: a single positive engine is enough.
