@@ -173,7 +173,7 @@ Goal: ship a ready-to-flash system image with the smallest possible attack surfa
 
 ### Current status
 
-A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. It is not hardened yet (USBGuard, sandboxing, firewall), and the production image has no signatures. See [docs/image.md](docs/image.md):
+A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. It is not fully hardened yet (sandboxing, firewall), and the production image has no signatures. See [docs/image.md](docs/image.md):
 
 ```sh
 image/build.sh --profile test   # build the test image (Docker only)
@@ -214,8 +214,9 @@ Tasks:
 - [ ] No interactive account by default, no SSH (explicitly enabled in maintenance mode only)
 - [ ] Hardened kernel settings (`sysctl`, `lockdown`, unused modules disabled)
 - [ ] `nftables` firewall: deny all by default
-- [ ] **USBGuard**: only mass-storage devices are allowed (BadUSB protection)
-- [ ] Blacklist of USB HID and USB network kernel modules
+- [x] **USBGuard**: only mass-storage devices (and hubs) are allowed (BadUSB protection), no device is authorized before USBGuard starts (`usbcore.authorized_default=0`)
+- [x] No USB network, wireless, Bluetooth, USB serial and modem drivers in the image; USB HID is kept for the touchscreen, keyboards and mice are blocked by USBGuard
+- [ ] USBGuard rule allowing the touchscreen of the reference hardware
 - [ ] Devices mounted with `ro,noexec,nosuid,nodev`, no automount
 - [ ] Limited set of supported filesystems (vfat, exfat, ntfs3, ext4)
 - [ ] Hardened systemd services (`ProtectSystem`, `PrivateNetwork`, `NoNewPrivileges`, seccomp filters)
@@ -241,7 +242,8 @@ Tasks:
 - [x] OVMF with the image signing keys enrolled: Secure Boot enabled, kernel lockdown, root filesystem on dm-verity; a modified root block cannot be read; firmware trusting another key refuses the image
 - [ ] Software TPM (`swtpm`), once measured boot is used
 - [ ] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4; only vfat for now), plus partitioned, unsupported and corrupted filesystems
-- [ ] Hardening checks: an emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard, no outgoing network outside the update channel
+- [x] An emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard: no input device, no network interface
+- [ ] No outgoing network outside the update channel
 - [ ] A/B update and rollback tested in the virtual machine
 - [ ] Run in continuous integration (KVM when nested virtualization is available, TCG emulation otherwise)
 

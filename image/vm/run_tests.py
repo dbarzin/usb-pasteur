@@ -217,6 +217,52 @@ def check_filesystems(vm: Machine) -> None:
     print(f"root: read-only erofs, /var: ext4, {size / 1024**3:.1f} GiB")
 
 
+def usb_devices(vm: Machine) -> dict[str, str]:
+    """Product name -> authorized flag ("0" or "1") of the USB devices."""
+    output = vm.shell.run(
+        "for d in /sys/bus/usb/devices/*; do [ -f $d/product ] && "
+        'echo "$(cat $d/authorized) $(cat $d/product)"; done; true'
+    )
+    return {line[2:]: line[0] for line in output.splitlines() if line[1:2] == " "}
+
+
+def check_usb_policy(vm: Machine) -> None:
+    step("USB devices other than storage are blocked")
+    authorized_default = vm.shell.run("cat /sys/module/usbcore/parameters/authorized_default")
+    check(authorized_default.strip() == "0", f"usbcore.authorized_default: {authorized_default}")
+    check(vm.shell.succeeds("systemctl is-active usbguard"), "usbguard is not running")
+    for module in ("usbnet", "cdc_ether", "rndis_host", "btusb", "cfg80211", "usbserial"):
+        check(not vm.shell.succeeds(f"modinfo {module}"), f"kernel module {module} is present")
+    check(vm.shell.succeeds("modinfo usb-storage"), "kernel module usb-storage is missing")
+
+    for driver, product in (("usb-kbd", "Keyboard"), ("usb-net", "Network")):
+        vm.add_usb_device(driver, driver)
+        deadline = time.monotonic() + 30
+        while True:
+            found = {name: flag for name, flag in usb_devices(vm).items() if product in name}
+            if found:
+                break
+            check(time.monotonic() < deadline, f"{driver} not seen by the kernel")
+            time.sleep(0.5)
+        time.sleep(2)  # leave time for USBGuard to apply its policy
+        found = {name: flag for name, flag in usb_devices(vm).items() if product in name}
+        check(set(found.values()) == {"0"}, f"{driver} was authorized: {found}")
+        name = next(iter(found))
+        print(f"{driver} ({name}): blocked")
+        vm.remove_usb_device(driver)
+
+    inputs = vm.shell.run("grep -i 'qemu.*keyboard' /proc/bus/input/devices || true").strip()
+    check(not inputs, f"input device created for the keyboard: {inputs}")
+    interfaces = vm.shell.run("ls /sys/class/net").split()
+    check(interfaces == ["lo"], f"network interfaces: {interfaces}")
+    audit = vm.shell.run(
+        "grep -c 'result=.SUCCESS.*target.new=.block' /var/log/usbguard/usbguard-audit.log || true"
+    ).strip()
+    print(
+        f"no input device, no network interface, {audit} devices blocked in the USBGuard audit log"
+    )
+
+
 def count_reports(vm: Machine) -> int:
     return int(vm.shell.run(f"ls {REPORTS} | wc -l"))
 
@@ -334,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_filesystems(vm)
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
+                check_usb_policy(vm)
                 check_reboot(vm, args.boot_timeout)
             current = workdir / "modified-root"
             check_modified_root(image, current, args.boot_timeout)

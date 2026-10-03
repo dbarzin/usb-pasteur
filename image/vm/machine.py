@@ -403,6 +403,14 @@ class Machine:
         self.monitor.wait_event("DEVICE_DELETED", device=device_id)
         self.monitor.execute("blockdev-del", **{"node-name": self.nodes.pop(device_id)})
 
+    def add_usb_device(self, driver: str, device_id: str) -> None:
+        """Plug an emulated USB device (usb-kbd, usb-net...) into the machine."""
+        self.monitor.execute("device_add", driver=driver, bus="xhci.0", id=device_id)
+
+    def remove_usb_device(self, device_id: str) -> None:
+        self.monitor.execute("device_del", id=device_id)
+        self.monitor.wait_event("DEVICE_DELETED", device=device_id)
+
     def reboot(self, timeout: float) -> None:
         """Reboot the machine and wait for the shell."""
         self.shell.send("systemctl reboot")

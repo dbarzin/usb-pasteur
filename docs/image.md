@@ -7,7 +7,7 @@ container (`image/Dockerfile`: mkosi, QEMU, OVMF), so the developer only needs
 Docker.
 
 > [!WARNING]
-> The image is not hardened yet (USBGuard, sandboxing, firewall), it is signed
+> The image is not fully hardened yet (sandboxing, firewall), it is signed
 > with development keys only, and the production image has no signatures yet
 > (the kiosk refuses to start until signature updates exist).
 > See the phase 2 tasks in the [README](../README.md#phase-2--minimal-hardened-image).
@@ -21,7 +21,7 @@ Docker.
 | `image/mkosi.prepare.chroot` | Runtime dependencies in a virtual environment (`/usr/lib/usb-pasteur`), from `image/requirements.txt` (pinned with their hashes) |
 | `image/mkosi.build.chroot` | usb-pasteur wheel, built from the repository without network |
 | `image/mkosi.postinst.chroot` | Installs usb-pasteur, its configuration, systemd service, tmpfiles and logrotate files (`packaging/`), and the clamd settings |
-| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units), `/etc/fstab`, growth of the data partition (`/usr/lib/repart.d/`) |
+| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units), `/etc/fstab`, growth of the data partition (`/usr/lib/repart.d/`), USBGuard policy |
 | `image/mkosi.profiles/test/` | Test profile, for the virtual machine tests only |
 | `image/vm/` | Virtual machine tests: corpus, QEMU driver, automated test |
 | `image/build.sh`, `image/vm.sh` | Build and run in the container |
@@ -110,6 +110,28 @@ contains the keys in the format expected by the firmware
 systemd-boot menu offers to enroll them. The virtual machines enroll the
 certificate with `virt-fw-vars` instead (`image/vm/machine.py`).
 
+## USB devices
+
+A kiosk must only use USB storage devices: a key that is also a keyboard
+(BadUSB) could type commands, a network adapter could open a network.
+
+- **USBGuard** (`/etc/usbguard/rules.conf`) allows hubs and the devices
+  whose interfaces are all mass storage; it blocks every other device,
+  including a key that has a storage interface and another one. Blocked
+  devices are listed in `/var/log/usbguard/usbguard-audit.log`.
+- **No device is authorized before USBGuard has started**: the kernel
+  command line sets `usbcore.authorized_default=0`. If USBGuard does not
+  start, no USB device is usable.
+- **Drivers removed from the image** (`KernelModulesExclude=` in
+  `image/mkosi.conf`): USB network adapters, wireless, Bluetooth, USB serial
+  adapters and modems, plus the staging drivers and batman-adv, which would
+  bring the wireless modules back as dependencies. Such devices have no
+  driver even if they were authorized.
+- **USB HID is kept**: the touchscreen of the kiosk is a USB HID device. It
+  will be allowed by its own USBGuard rule once the reference hardware is
+  chosen; until then, every keyboard, mouse and touchscreen is blocked. The
+  virtual machines are not affected: their keyboard is not a USB device.
+
 ## Dependencies
 
 Runtime dependencies are pinned with their hashes in `image/requirements.txt`.
@@ -154,7 +176,9 @@ the virtio console:
    infected files are quarantined (checked against their SHA-256) and
    removed from the key, which is ejected;
 7. the key is removed: only the clean files are left on it;
-8. the cleaned key is inserted again and reported clean;
+8. the cleaned key is inserted again and reported clean; an emulated USB
+   keyboard and network adapter are blocked by USBGuard (no input device, no
+   network interface) and the excluded drivers are not in the image;
 9. after a reboot, the scan reports are still there and the root filesystem
    is unchanged.
 

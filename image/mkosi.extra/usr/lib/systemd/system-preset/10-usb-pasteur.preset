@@ -5,6 +5,7 @@ enable usb-pasteur.service
 enable clamav-daemon.socket
 enable clamav-daemon.service
 enable logrotate.timer
+enable usbguard.service
 
 # No network: signature updates come through a dedicated channel (phase 2)
 disable clamav-freshclam.service
@@ -18,6 +19,7 @@ disable remote-fs.target
 
 # Not used on the kiosk
 disable clamav-clamonacc.service
+disable usbguard-dbus.service
 disable systemd-homed.service
 disable systemd-homed-activate.service
 disable dpkg-db-backup.timer
