@@ -37,13 +37,14 @@ Be respectful, constructive and patient. Harassment or discriminatory behavior w
 
 ### Development environment
 
-USB-Pasteur targets **Python 3.12+**.
+USB-Pasteur requires **Python 3.11+** (the system image uses Python 3.13). Upgrade pip first (`pip install -U pip`): old versions, such as the one of Debian 12, take a very long time to report dependency errors.
 
 ```sh
 git clone https://github.com/<your-account>/usb-pasteur.git
 cd usb-pasteur
 python3 -m venv .venv
 . .venv/bin/activate
+pip install -U pip
 pip install -e ".[dev]"
 ```
 

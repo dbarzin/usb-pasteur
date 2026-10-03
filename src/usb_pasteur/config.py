@@ -6,7 +6,7 @@ import socket
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 DEFAULT_CONFIG_PATH = Path("/etc/usb-pasteur/usb-pasteur.toml")
 
@@ -14,6 +14,9 @@ INTERFACES = ("curses", "console")
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 SUSPICIOUS_POLICIES = ("block", "warn")
 SUPPORTED_FILESYSTEMS = ("vfat", "exfat", "ntfs", "ext4")
+
+
+T = TypeVar("T")
 
 
 class ConfigError(Exception):
@@ -166,7 +169,7 @@ def _reject_unknown(table: dict[str, Any], allowed: Any, section: str) -> None:
         raise ConfigError(f"unknown key(s) in {where}: {', '.join(unknown)}")
 
 
-def _get[T](table: dict[str, Any], section: str, key: str, kind: type[T], default: T) -> T:
+def _get(table: dict[str, Any], section: str, key: str, kind: type[T], default: T) -> T:
     if key not in table:
         return default
     value = table[key]

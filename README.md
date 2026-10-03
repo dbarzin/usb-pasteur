@@ -19,7 +19,7 @@ Provide a **free, auditable and hardened** USB decontamination kiosk, a credible
 - **Offline by default**: no network connection is required to scan; updates go through a signed channel.
 - **Plugin engines**: every detection engine implements a common interface.
 - **Traceability**: every scan produces a structured, timestamped report.
-- **Language**: Python 3.12+ for the orchestrator (reuse of pandora-box code, analysis ecosystem).
+- **Language**: Python 3.11+ for the orchestrator (reuse of pandora-box code, analysis ecosystem).
 
 ---
 
@@ -77,6 +77,7 @@ No real detection engine is available until phase 1: the kiosk refuses to start 
 ### Quick start (development)
 
 ```sh
+pip install -U pip
 pip install -e ".[dev]"
 cp packaging/usb-pasteur.toml usb-pasteur.toml   # then set fake_scan = true
 usb-pasteur --config usb-pasteur.toml --check-config
