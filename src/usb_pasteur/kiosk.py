@@ -11,6 +11,7 @@ from usb_pasteur.config import Config
 from usb_pasteur.device import DeviceError, Mounter, SystemMountWatcher, UsbDevice
 from usb_pasteur.engines import Engine
 from usb_pasteur.engines.registry import NoEngineError, engine_specs, load_engines
+from usb_pasteur.hashing import hash_fd
 from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.monitor import Action, DeviceSource
 from usb_pasteur.policy import device_verdict
@@ -277,21 +278,31 @@ class Kiosk:
 
         log_event(logger, "infected_files", count=len(infected))
         self._list(f"{len(infected)} infected files detected:", infected)
+        # The device is not mounted while the user decides: it can be removed
+        try:
+            self.mounter.unmount()
+        except DeviceError as ex:
+            log_event(logger, "unmount_failed", logging.ERROR, error=str(ex))
+            self.display.message(f"Cannot unmount device: {ex}")
+            return State.ERROR
         self.display.confirm("PRESS A KEY OR TOUCH THE SCREEN TO CLEAN")
 
-        if not self.mounter.is_present():
+        device = self.device
+        if device is None or not self.mounter.device_present(device):
             log_event(logger, "device_removed_before_clean", logging.WARNING)
             self.display.message("Device removed before cleaning: NOT CLEANED")
             return State.ERROR
         try:
-            self.mounter.remount_rw()
+            # Read-write only to remove the infected files
+            self.mounter.mount(device, read_only=False)
         except DeviceError as ex:
-            log_event(logger, "remount_failed", logging.ERROR, error=str(ex))
+            log_event(logger, "mount_rw_failed", logging.ERROR, error=str(ex))
             self.display.message(f"Cannot clean device: {ex}")
             return State.ERROR
+        log_event(logger, "device_mounted_rw", node=device.node)
 
         for result in infected:
-            if self._remove(result.path):
+            if self._remove(result):
                 self.actions.removed.append(result)
             else:
                 self.actions.remove_failed.append(result)
@@ -363,22 +374,38 @@ class Kiosk:
         if len(results) > _MAX_LISTED:
             self.display.message("...")
 
-    def _remove(self, path: Path) -> bool:
+    def _remove(self, result: FileResult) -> bool:
+        """Remove an infected file, if it is still the file that was scanned.
+
+        The device was unmounted while waiting for the user, who may have
+        inserted another device: the content must have the scanned SHA-256.
+        """
         root = self.mounter.mount_point
+        path = root / result.rel_path
+        name = escape(result.rel_path)
         # Never follow a link out of the device
         if not Path(os.path.realpath(path)).is_relative_to(os.path.realpath(root)):
-            log_event(logger, "remove_refused", logging.ERROR, path=escape(str(path)))
+            log_event(logger, "remove_refused", logging.ERROR, path=name, reason="outside")
             return False
         try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            try:
+                sha256 = hash_fd(fd).sha256
+            finally:
+                os.close(fd)
+            if result.info is None or sha256 != result.info.sha256:
+                log_event(
+                    logger, "remove_refused", logging.ERROR, path=name, reason="content changed"
+                )
+                self.display.message(f"Not removed, changed since the scan: {result.rel_path}")
+                return False
             path.unlink()
         except OSError as ex:
-            log_event(
-                logger, "remove_failed", logging.ERROR, path=escape(str(path)), error=ex.strerror
-            )
-            self.display.message(f"Could not remove {path.name}: {ex.strerror}")
+            log_event(logger, "remove_failed", logging.ERROR, path=name, error=ex.strerror)
+            self.display.message(f"Could not remove {result.rel_path}: {ex.strerror}")
             return False
-        log_event(logger, "file_removed", path=escape(str(path)))
-        self.display.message(f"{path.relative_to(root)} removed")
+        log_event(logger, "file_removed", path=name)
+        self.display.message(f"{result.rel_path} removed")
         return True
 
     def _unmount(self) -> None:

@@ -91,19 +91,36 @@ def test_find_mount(tmp_path: Path) -> None:
 
 
 def test_system_mount(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def no_command(argv: list[str], **kwargs: Any) -> None:
-        raise AssertionError("no mount command in auto-mount mode")
-
-    monkeypatch.setattr(subprocess, "run", no_command)
     key = tmp_path / "key"
     key.mkdir()
-    watcher = SystemMountWatcher(["vfat"], mounts=mounts_file(tmp_path, "/dev/sdb1", key))
-    watcher.mount(UsbDevice("/dev/sdb1", "vfat"))
+    mounts = mounts_file(tmp_path, "/dev/sdb1", key)
+    calls: list[list[str]] = []
+
+    def udisksctl(argv: list[str], **kwargs: Any) -> None:
+        calls.append(argv)
+        if argv[1] == "unmount":
+            mounts.write_text("")
+        else:
+            mounts_file(tmp_path, "/dev/sdb1", key)
+
+    monkeypatch.setattr(subprocess, "run", udisksctl)
+    watcher = SystemMountWatcher(["vfat"], mounts=mounts)
+    device = UsbDevice("/dev/sdb1", "vfat")
+    # Mounted by the system at insertion: no command
+    watcher.mount(device)
+    assert calls == []
     assert watcher.mount_point == key
     assert watcher.is_mounted()
-    watcher.remount_rw()
+    # Unmounted, then mounted again (read-write) through udisks
     watcher.unmount()
     assert watcher.device is None
+    watcher.mount(device, read_only=False)
+    watcher.unmount()
+    assert calls == [
+        ["/usr/bin/udisksctl", "unmount", "--no-user-interaction", "-b", "/dev/sdb1"],
+        ["/usr/bin/udisksctl", "mount", "--no-user-interaction", "-b", "/dev/sdb1"],
+        ["/usr/bin/udisksctl", "unmount", "--no-user-interaction", "-b", "/dev/sdb1"],
+    ]
 
 
 def test_system_mount_timeout(tmp_path: Path) -> None:
@@ -120,4 +137,4 @@ def test_system_mount_checks(tmp_path: Path) -> None:
         watcher.mount(UsbDevice("/dev/sdb1", "ntfs"))
     watcher.mount(UsbDevice("/dev/sdb1", "vfat"))
     with pytest.raises(DeviceError, match="read-only by the system"):
-        watcher.remount_rw()
+        watcher.mount(UsbDevice("/dev/sdb1", "vfat"), read_only=False)

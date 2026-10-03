@@ -140,6 +140,14 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
         original_progress(percent)
 
     display.progress = record  # type: ignore[method-assign]
+    mounted_at_confirm: list[bool] = []
+    original_confirm = display.confirm
+
+    def confirm(prompt: str) -> None:
+        mounted_at_confirm.append(os.path.ismount(mount_point))
+        original_confirm(prompt)
+
+    display.confirm = confirm  # type: ignore[method-assign]
     mounter = Mounter(mount_point, config.device.allowed_filesystems)
     source = ListSource([DeviceEvent(Action.ADD, usb_key)])
     with build_pool(config) as pool:
@@ -150,6 +158,8 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
     for options in options_during_scan:
         assert {"ro", "noexec", "nosuid", "nodev"} <= set(options)
     assert not os.path.ismount(mount_point)
+    # The user could remove the device while asked to confirm the cleaning
+    assert mounted_at_confirm == [False]
     assert "Device cleaned! You can remove the device." in display.messages
 
     # Infected files are quarantined

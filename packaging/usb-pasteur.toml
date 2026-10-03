@@ -18,7 +18,11 @@ interface = "curses"
 # Folder where the USB device is mounted (must exist)
 mount_point = "/media/usb-pasteur"
 
-# Run mount/umount through "sudo -n" when the kiosk does not run as root
+# Mounting a block device requires root (CAP_SYS_ADMIN): adding the user to a
+# group is not enough. Run the kiosk as root (systemd service), or set
+# use_sudo = true to run mount/umount through "sudo -n", with a sudoers rule
+# limited to these commands, for instance:
+#   usb-pasteur ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount
 use_sudo = false
 
 # Filesystems that may be mounted; any other device is rejected
@@ -30,7 +34,8 @@ command_timeout = 60
 # DEVELOPMENT ONLY, never on a kiosk: when the desktop mounts USB devices
 # itself (udisks automount), use that mount instead of mounting the device.
 # The device is then scanned on the system mount (usually read-write, maybe
-# without noexec) and mount_point is ignored.
+# without noexec) and mount_point is ignored. It is unmounted and mounted
+# again with udisksctl, which the desktop user may run without root.
 auto_mount = false
 # Maximum time to wait for the system to mount the device, in seconds
 auto_mount_wait = 15.0

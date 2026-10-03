@@ -72,9 +72,6 @@ class DirectoryMounter(Mounter):
         self.mounted = True
         self.read_only = read_only
 
-    def remount_rw(self) -> None:
-        self.read_only = False
-
     def unmount(self) -> None:
         self.mounted = False
         self.device = None
@@ -82,8 +79,8 @@ class DirectoryMounter(Mounter):
     def is_mounted(self) -> bool:
         return self.mounted
 
-    def is_present(self) -> bool:
-        return self.present and self.mounted
+    def device_present(self, device: UsbDevice) -> bool:
+        return self.present
 
 
 @contextmanager

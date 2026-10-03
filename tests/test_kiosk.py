@@ -285,8 +285,15 @@ def test_stale_signatures(config: Config) -> None:
 
 
 def test_auto_mount(
-    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+    config: Config,
+    display: RecordingDisplay,
+    usb_tree: Path,
+    pool: WorkerPool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import subprocess
+
+    commands: list[str] = []
     from usb_pasteur.device import SystemMountWatcher
 
     config = dataclasses.replace(config, device=dataclasses.replace(config.device, auto_mount=True))
@@ -294,10 +301,58 @@ def test_auto_mount(
     node = usb_tree.parent / "sdb1"
     node.touch()
     mounts = usb_tree.parent / "mounts"
-    mounts.write_text(f"{node} {usb_tree} vfat rw,nosuid,nodev 0 0\n")
+    mounted = f"{node} {usb_tree} vfat rw,nosuid,nodev 0 0\n"
+    mounts.write_text(mounted)
+
+    def udisksctl(argv: list[str], **kwargs: object) -> None:
+        # Simulate udisks: update the mount table
+        commands.append(argv[1])
+        mounts.write_text("" if argv[1] == "unmount" else mounted)
+
+    monkeypatch.setattr(subprocess, "run", udisksctl)
     watcher = SystemMountWatcher(["vfat"], mounts=mounts)
     source = ListSource([DeviceEvent(Action.ADD, UsbDevice(str(node), "vfat", "KEY"))])
     Kiosk(config, display, source, pool, watcher).run()
     assert display.messages[1].startswith("AUTO-MOUNT MODE")
     assert not (usb_tree / "docs" / "eicar.com").exists()
     assert "Device cleaned! You can remove the device." in display.messages
+    # Unmounted before the confirmation, mounted again to clean, then unmounted
+    assert commands == ["unmount", "mount", "unmount"]
+
+
+def test_unmounted_while_waiting_for_the_user(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
+    mounter = DirectoryMounter(usb_tree)
+    states: list[tuple[bool, bool | None]] = []
+    original_confirm = display.confirm
+
+    def record(prompt: str) -> None:
+        states.append((mounter.mounted, mounter.read_only))
+        original_confirm(prompt)
+
+    display.confirm = record  # type: ignore[method-assign]
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
+    # Not mounted during the confirmation, then mounted read-write to clean
+    assert states == [(False, True)]
+    assert mounter.read_only is False
+    assert not mounter.mounted
+    assert not (usb_tree / "docs" / "eicar.com").exists()
+
+
+def test_file_changed_before_clean(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
+    mounter = DirectoryMounter(usb_tree)
+    original_confirm = display.confirm
+
+    def swap_device(prompt: str) -> None:
+        original_confirm(prompt)
+        # Another device with a file at the same path is inserted
+        (usb_tree / "docs" / "eicar.com").write_text("someone else's document")
+
+    display.confirm = swap_device  # type: ignore[method-assign]
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
+    assert (usb_tree / "docs" / "eicar.com").read_text() == "someone else's document"
+    assert "Not removed, changed since the scan: docs/eicar.com" in display.messages
+    assert "Device NOT cleaned: 1 files remain" in display.messages

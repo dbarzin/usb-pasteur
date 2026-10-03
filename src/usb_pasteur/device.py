@@ -23,6 +23,7 @@ _NO_UNIX_PERMISSIONS = {"vfat", "exfat", "ntfs"}
 MOUNT = "/usr/bin/mount"
 UMOUNT = "/usr/bin/umount"
 SUDO = "/usr/bin/sudo"
+UDISKSCTL = "/usr/bin/udisksctl"
 
 
 class DeviceError(Exception):
@@ -98,13 +99,6 @@ class Mounter:
         self.device = device
         log_event(logger, "device_mounted", node=device.node, options=",".join(options))
 
-    def remount_rw(self) -> None:
-        """Remount the device read-write, only to remove infected files."""
-        if self.device is None:
-            raise DeviceError("no device mounted")
-        self._run(MOUNT, "-o", "remount,rw", str(self.mount_point))
-        log_event(logger, "device_remounted_rw", node=self.device.node)
-
     def unmount(self) -> None:
         if not self.is_mounted():
             self.device = None
@@ -116,9 +110,9 @@ class Mounter:
     def is_mounted(self) -> bool:
         return os.path.ismount(self.mount_point)
 
-    def is_present(self) -> bool:
-        """Check that the mounted device is still plugged in."""
-        return self.device is not None and Path(self.device.node).exists() and self.is_mounted()
+    def device_present(self, device: UsbDevice) -> bool:
+        """Check that the device is still plugged in."""
+        return Path(device.node).exists()
 
     def _run(self, *command: str) -> None:
         argv = [SUDO, "-n", *command] if self.use_sudo else list(command)
@@ -171,8 +165,9 @@ class SystemMountWatcher(Mounter):
 
     DEVELOPMENT ONLY (device.auto_mount): the system mounts the device with
     its own options, usually read-write and possibly without noexec, so the
-    hardened read-only mount of the kiosk is lost. The device is never mounted
-    nor unmounted here: we wait for the system mount and use its mount point.
+    hardened read-only mount of the kiosk is lost. At insertion, we wait for
+    the system mount and use its mount point. Later unmounts and mounts go
+    through udisks (udisksctl), which a desktop user may run without root.
     """
 
     def __init__(
@@ -187,16 +182,24 @@ class SystemMountWatcher(Mounter):
         self.mounts = mounts
         self.poll = poll
         self.options: list[str] = []
+        # Device node unmounted by us: the system will not mount it again
+        self._released: str | None = None
 
     def mount(self, device: UsbDevice, read_only: bool = True) -> None:
         if device.fs_type not in self.allowed_filesystems:
             raise DeviceError(f"filesystem not allowed: {device.fs_type or 'unknown'}")
+        if device.node == self._released and find_mount(device.node, self.mounts) is None:
+            self._run(UDISKSCTL, "mount", "--no-user-interaction", "-b", device.node)
+        self._released = None
         deadline = time.monotonic() + self.wait
         while (found := find_mount(device.node, self.mounts)) is None:
             if time.monotonic() >= deadline:
                 raise DeviceError(f"not mounted by the system after {self.wait:g}s")
             time.sleep(self.poll)
-        self.mount_point, self.options = found
+        mount_point, options = found
+        if not read_only and "rw" not in options:
+            raise DeviceError("device mounted read-only by the system")
+        self.mount_point, self.options = mount_point, options
         self.device = device
         log_event(
             logger,
@@ -207,16 +210,12 @@ class SystemMountWatcher(Mounter):
             options=",".join(self.options),
         )
 
-    def remount_rw(self) -> None:
-        if self.device is None:
-            raise DeviceError("no device mounted")
-        if "rw" not in self.options:
-            raise DeviceError("device mounted read-only by the system")
-
     def unmount(self) -> None:
-        # The system owns the mount: only flush the writes of the cleaning
-        if self.device is not None:
-            os.sync()
+        device = self.device
+        if device is not None and find_mount(device.node, self.mounts) is not None:
+            self._run(UDISKSCTL, "unmount", "--no-user-interaction", "-b", device.node)
+            self._released = device.node
+            log_event(logger, "device_unmounted", mount_point=str(self.mount_point))
         self.device = None
         self.options = []
 
