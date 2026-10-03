@@ -85,6 +85,36 @@ def check_boot(vm: Machine, timeout: float) -> None:
     print(f"kiosk started with engines {', '.join(engines)}")
 
 
+def check_filesystems(vm: Machine) -> None:
+    step("check the filesystems")
+    fs_type, options = vm.shell.run("findmnt -n -o FSTYPE,OPTIONS /").split()
+    check(fs_type == "erofs" and "ro" in options.split(","), f"root: {fs_type} {options}")
+    for path in ("/etc/usb-pasteur/test", "/usr/test", "/media/test"):
+        check(not vm.shell.succeeds(f"touch {path}"), f"{path} is writable")
+    fs_type, options = vm.shell.run("findmnt -n -o FSTYPE,OPTIONS /var").split()
+    check(fs_type == "ext4" and "rw" in options.split(","), f"/var: {fs_type} {options}")
+    # The data partition and its filesystem grew to fill the disk (8 GB)
+    size = int(vm.shell.run("findmnt -n -b -o SIZE /var"))
+    check(size > 6 * 1024**3, f"/var was not grown: {size} bytes")
+    print(f"root: read-only erofs, /var: ext4, {size / 1024**3:.1f} GiB")
+
+
+def count_reports(vm: Machine) -> int:
+    return int(vm.shell.run(f"ls {REPORTS} | wc -l"))
+
+
+def check_reboot(vm: Machine, timeout: float) -> None:
+    step("reboot: the data is kept, the system is unchanged")
+    reports = count_reports(vm)
+    vm.reboot(timeout)
+    wait_event(vm, "kiosk_started", occurrence=2, timeout=timeout)
+    check(count_reports(vm) == reports, "scan reports lost after a reboot")
+    check(not vm.shell.succeeds("test -e /usr/test"), "the root filesystem changed")
+    failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
+    check(not failed, f"failed units:\n{failed}")
+    print(f"{reports} scan reports kept")
+
+
 def check_infected_key(vm: Machine, key: Path) -> None:
     step("insert the infected key")
     vm.insert_key(key)
@@ -170,8 +200,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with Machine(args.image.resolve(), workdir) as vm:
                 check_boot(vm, args.boot_timeout)
+                check_filesystems(vm)
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
+                check_reboot(vm, args.boot_timeout)
         except (TestFailure, MachineError, TimeoutError) as ex:
             print(f"FAILED: {ex}", file=sys.stderr)
             serial = workdir / "serial.log"

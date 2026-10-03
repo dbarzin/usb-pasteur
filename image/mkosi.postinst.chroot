@@ -13,6 +13,8 @@ install -D -m 0644 "$PACKAGING/usb-pasteur.toml" /etc/usb-pasteur/usb-pasteur.to
 install -D -m 0644 "$PACKAGING/systemd/usb-pasteur.service" \
     /usr/lib/systemd/system/usb-pasteur.service
 install -D -m 0644 "$PACKAGING/tmpfiles/usb-pasteur.conf" /usr/lib/tmpfiles.d/usb-pasteur.conf
+# The root filesystem is read-only: tmpfiles cannot create the mount point
+install -d -m 0700 /media/usb-pasteur
 install -D -m 0644 "$PACKAGING/logrotate/usb-pasteur" /etc/logrotate.d/usb-pasteur
 
 # clamd settings required by the ClamAV engine (docs/engines.md)

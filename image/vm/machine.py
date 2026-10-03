@@ -33,6 +33,8 @@ import corpus
 OVMF_CODE = Path("/usr/share/OVMF/OVMF_CODE_4M.secboot.fd")
 OVMF_VARS = Path("/usr/share/OVMF/OVMF_VARS_4M.fd")
 KEY_SIZE = 64 * 1024 * 1024
+# Disk of the machine, bigger than the image: the data partition grows at boot
+DISK_SIZE = "8G"
 
 
 class MachineError(Exception):
@@ -71,8 +73,7 @@ def qemu_argv(image: Path, workdir: Path, interactive: bool = False) -> list[str
         "-smp", "2",
         "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
         "-drive", f"if=pflash,format=raw,file={workdir / 'OVMF_VARS.fd'}",
-        # snapshot: the built image is never modified
-        "-drive", f"if=none,id=system,format=raw,snapshot=on,file={image}",
+        "-drive", f"if=none,id=system,format=qcow2,file={workdir / 'system.qcow2'}",
         "-device", "virtio-blk-pci,drive=system",
         # Empty USB 3 controller: keys are inserted while the machine runs
         "-device", "qemu-xhci,id=xhci",
@@ -102,13 +103,20 @@ def qemu_argv(image: Path, workdir: Path, interactive: bool = False) -> list[str
     return argv
 
 
-def prepare_workdir(workdir: Path) -> None:
+def prepare_workdir(image: Path, workdir: Path) -> None:
     workdir.mkdir(parents=True, exist_ok=True)
     # Sockets of a previous run: never connect to them
     for name in ("qmp.sock", "console.sock"):
         (workdir / name).unlink(missing_ok=True)
     # Firmware variables of this machine: no keys enrolled (Secure Boot setup mode)
     shutil.copyfile(OVMF_VARS, workdir / "OVMF_VARS.fd")
+    # Disk of this machine: the built image is never modified, the writes go
+    # to a new overlay (a new disk at every start)
+    subprocess.run(
+        ["qemu-img", "create", "-q", "-f", "qcow2", "-F", "raw", "-b", str(image),
+         str(workdir / "system.qcow2"), DISK_SIZE],
+        check=True,
+    )  # fmt: skip
 
 
 def connect(path: Path, timeout: float = 30.0) -> socket.socket:
@@ -225,6 +233,19 @@ class Console:
                 if time.monotonic() > deadline:
                     raise MachineError("no shell on the virtio console") from None
 
+    def send(self, command: str) -> None:
+        """Send a command without waiting for it (reboot)."""
+        self.sock.sendall(f"{command}\n".encode())
+
+    def reset(self) -> None:
+        """Forget the output of the previous boot."""
+        self.buffer = b""
+
+    def succeeds(self, command: str, timeout: float = 60.0) -> bool:
+        """Run a shell command, ignoring its output; return whether it succeeded."""
+        output = self.run(f"if {command} >/dev/null 2>&1; then echo yes; else echo no; fi", timeout)
+        return output.strip().endswith("yes")
+
     def run(self, command: str, timeout: float = 60.0, check: bool = True) -> str:
         """Run a shell command; return its output."""
         self.count += 1
@@ -269,7 +290,7 @@ class Machine:
         self.stop()
 
     def start(self) -> None:
-        prepare_workdir(self.workdir)
+        prepare_workdir(self.image, self.workdir)
         with (self.workdir / "qemu.log").open("wb") as log:
             self.process = subprocess.Popen(
                 qemu_argv(self.image, self.workdir), stdout=log, stderr=subprocess.STDOUT
@@ -321,13 +342,20 @@ class Machine:
         self.monitor.wait_event("DEVICE_DELETED", device=device_id)
         self.monitor.execute("blockdev-del", **{"node-name": self.nodes.pop(device_id)})
 
+    def reboot(self, timeout: float) -> None:
+        """Reboot the machine and wait for the shell."""
+        self.shell.send("systemctl reboot")
+        self.monitor.wait_event("RESET", timeout=120)
+        self.shell.reset()
+        self.shell.login(timeout)
+
     def press_key(self, qcode: str = "ret") -> None:
         """Press a key on the kiosk screen (active virtual terminal)."""
         self.monitor.execute("send-key", keys=[{"type": "qcode", "data": qcode}])
 
 
 def run_interactive(image: Path, workdir: Path) -> int:
-    prepare_workdir(workdir)
+    prepare_workdir(image, workdir)
     key = workdir / "usbkey.img"
     make_key(key)
     print(

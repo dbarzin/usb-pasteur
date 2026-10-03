@@ -7,9 +7,8 @@ container (`image/Dockerfile`: mkosi, QEMU, OVMF), so the developer only needs
 Docker.
 
 > [!WARNING]
-> The image is a first step: the root filesystem is still writable, the image
-> is neither signed nor protected by dm-verity, and the production image has
-> no signatures yet (the kiosk refuses to start until signature updates exist).
+> The image is a first step: it is neither signed nor protected by dm-verity,
+> and the production image has no signatures yet (the kiosk refuses to start until signature updates exist).
 > See the phase 2 tasks in the [README](../README.md#phase-2--minimal-hardened-image).
 
 ## Layout
@@ -17,11 +16,11 @@ Docker.
 | Path | Role |
 |---|---|
 | `image/mkosi.conf` | Image definition: Debian 13, x86_64, systemd-boot, unified kernel image (UKI), packages |
-| `image/mkosi.repart/` | Partitions: ESP and root filesystem |
+| `image/mkosi.repart/` | Partitions: ESP, read-only root filesystem, data partition |
 | `image/mkosi.prepare.chroot` | Runtime dependencies in a virtual environment (`/usr/lib/usb-pasteur`), from `image/requirements.txt` (pinned with their hashes) |
 | `image/mkosi.build.chroot` | usb-pasteur wheel, built from the repository without network |
 | `image/mkosi.postinst.chroot` | Installs usb-pasteur, its configuration, systemd service, tmpfiles and logrotate files (`packaging/`), and the clamd settings |
-| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units) |
+| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units), `/etc/fstab`, growth of the data partition (`/usr/lib/repart.d/`) |
 | `image/mkosi.profiles/test/` | Test profile, for the virtual machine tests only |
 | `image/vm/` | Virtual machine tests: corpus, QEMU driver, automated test |
 | `image/build.sh`, `image/vm.sh` | Build and run in the container |
@@ -45,6 +44,24 @@ in the `usb-pasteur-mkosi` Docker volume) and take less than a minute.
 The cache is not rebuilt when `image/requirements.txt` or
 `image/mkosi.prepare.chroot` change: rebuild it with `image/build.sh -f`
 (`docker volume rm usb-pasteur-mkosi` removes it completely).
+
+The disk image has three partitions:
+
+| Partition | Filesystem | Content |
+|---|---|---|
+| ESP | vfat, 512 MB | systemd-boot and the UKI |
+| root | EROFS, read-only | the whole system but `/var` (about 400 MB) |
+| data (`usb-pasteur-data`) | ext4, 1 GB in the image | `/var`: scan reports, quarantine, logs, signatures, clamd database |
+
+The root filesystem is read-only by design (EROFS cannot be written at all):
+the system and its configuration only change with a new image. Everything
+the kiosk writes is in `/var`. The data partition is the last one: at every
+boot, `systemd-repart` grows it to fill the disk
+(`/usr/lib/repart.d/20-var.conf`), then `systemd-growfs` grows its
+filesystem (`x-systemd.growfs` in `/etc/fstab`), so the image can be written
+to a disk of any size. As `/etc` is read-only, the machine ID is generated
+again at every boot (a new journal folder per boot, within the journald
+size limits).
 
 The image contains:
 
@@ -87,16 +104,21 @@ USB 3 controller. It plays the whole user workflow, through QMP and the
 shell on the virtio console:
 
 1. the kiosk starts with its four engines and no systemd unit fails;
-2. an emulated USB key (a vfat disk image holding the corpus) is inserted,
+2. the root filesystem is read-only EROFS, and `/var` was grown to fill the
+   8 GB disk of the machine;
+3. an emulated USB key (a vfat disk image holding the corpus) is inserted,
    which triggers the same udev events as a real device;
-3. each file gets the expected verdict from the expected engine;
-4. the cleaning is confirmed with a key press on the kiosk screen; the
+4. each file gets the expected verdict from the expected engine;
+5. the cleaning is confirmed with a key press on the kiosk screen; the
    infected files are quarantined (checked against their SHA-256) and
    removed from the key, which is ejected;
-5. the key is removed: only the clean files are left on it;
-6. the cleaned key is inserted again and reported clean.
+6. the key is removed: only the clean files are left on it;
+7. the cleaned key is inserted again and reported clean;
+8. after a reboot, the scan reports are still there and the root filesystem
+   is unchanged.
 
-It takes less than a minute with KVM. `image/vm.sh test --workdir DIR` keeps
+The built image is never modified: the machine writes to a new disk overlay
+(`system.qcow2`) at every start. It takes less than a minute with KVM. `image/vm.sh test --workdir DIR` keeps
 the serial console log, the QEMU log and the key image in `DIR`.
 
 ## Interactive virtual machine
