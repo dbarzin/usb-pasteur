@@ -6,4 +6,5 @@ The kiosk runs on the first console (tty1), not here: see it over VNC
   systemctl status usb-pasteur       kiosk service
   tail -f /var/log/usb-pasteur/usb-pasteur.log
   ls /var/lib/usb-pasteur/reports    scan reports
+  shutdown now                       stop the kiosk (the virtual machine)
 
