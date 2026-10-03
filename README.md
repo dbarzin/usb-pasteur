@@ -76,7 +76,7 @@ The pandora-box code has been ported to the `usb_pasteur` package (`src/usb_past
 | `ui/` | Curses (administrator) and console interfaces |
 | `logs.py`, `lock.py` | JSON logs, single-instance lock |
 
-Deployment files are in `packaging/`: example configuration, systemd service and logrotate.
+Deployment files are in `packaging/`: example configuration, systemd service, tmpfiles and logrotate.
 
 The detection engines, their data files and the verdict policy are described in [docs/engines.md](docs/engines.md). Every engine is enabled by default: the kiosk refuses to start when an enabled engine cannot load its signatures, or when no content engine (ClamAV or YARA-X) is enabled.
 
@@ -171,9 +171,18 @@ See [docs/engines.md](docs/engines.md) for the engines and the verdict policy.
 
 Goal: ship a ready-to-flash system image with the smallest possible attack surface.
 
+### Current status
+
+A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. It is not hardened yet: writable root filesystem, no dm-verity, no Secure Boot signing, and no signatures in the production image. See [docs/image.md](docs/image.md):
+
+```sh
+image/build.sh --profile test   # build the test image (Docker only)
+image/vm.sh test                # end-to-end test in a virtual machine
+```
+
 ### Build
 
-- [ ] Image based on Debian 13 (trixie), built with `mkosi`
+- [x] Image based on Debian 13 (trixie), built with `mkosi`
 - [ ] Reproducible builds and an SBOM generated for every release
 - [ ] Single target: x86_64 (see reference hardware); ARM64 is not targeted, as the Raspberry Pi proved too slow
 - [ ] Signed image and published checksums
@@ -219,6 +228,20 @@ Tasks:
 - [ ] Online updates through a dedicated channel (proxy, domain allowlist)
 - [ ] Offline updates from a signed USB device, for air-gapped kiosks
 - [ ] Signature verification before loading databases
+
+### Testing in a virtual machine
+
+The container end-to-end tests (`tests/e2e/run.sh`) cover the scan workflow, but not the image itself: boot, Secure Boot, dm-verity, kernel settings, udev, USBGuard, systemd services. The whole chain is tested locally in a QEMU/KVM virtual machine, without the reference hardware: the image boots with UEFI firmware (OVMF) and an empty USB 3 controller, and emulated USB keys (disk images) are inserted and removed while the kiosk runs, which triggers the same udev events as a real device. Hostile samples are only ever copied into key images, never onto the development desktop. See [docs/image.md](docs/image.md) for the automated test and the interactive virtual machine.
+
+Tasks:
+
+- [x] Test image profile: test-only signatures that detect the test corpus, root shell on the virtio console
+- [x] Automated end-to-end test in the virtual machine: insertion through QMP, verdicts of every engine, cleaning confirmed on the kiosk screen, quarantine, report, eject, removal, clean key inserted again
+- [ ] OVMF with the project Secure Boot keys enrolled, software TPM (`swtpm`)
+- [ ] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4; only vfat for now), plus partitioned, unsupported and corrupted filesystems
+- [ ] Hardening checks: an emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard, no outgoing network outside the update channel, read-only root filesystem, a modified system partition is refused by dm-verity
+- [ ] A/B update and rollback tested in the virtual machine
+- [ ] Run in continuous integration (KVM when nested virtualization is available, TCG emulation otherwise)
 
 ## Phase 3 — Kiosk interface
 
