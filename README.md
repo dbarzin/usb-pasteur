@@ -76,15 +76,59 @@ No real detection engine is available until phase 1: the kiosk refuses to start 
 
 ### Quick start (development)
 
+#### Prerequisites
+
+- Linux with udev (USB detection and mounting require root privileges)
+- **Python 3.11 or later**
+
+Recent distributions (Debian 12 and later, Ubuntu 23.04 and later) forbid `pip install` into the system Python ([PEP 668](https://peps.python.org/pep-0668/), `externally-managed-environment` error). Always work inside a virtual environment, and never use `--break-system-packages`.
+
+#### Create the virtual environment
+
+If your system Python is 3.11 or later (Debian 12 and 13, Ubuntu 24.04):
+
 ```sh
+sudo apt install python3-venv python3-full
+git clone https://github.com/dbarzin/usb-pasteur.git
+cd usb-pasteur
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -U pip
 pip install -e ".[dev]"
+```
+
+If your system Python is older (Ubuntu 22.04 ships Python 3.10), use [uv](https://docs.astral.sh/uv/), which downloads a suitable Python without touching the system:
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/dbarzin/usb-pasteur.git
+cd usb-pasteur
+uv venv --python 3.11
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+```
+
+#### Configure and run
+
+```sh
 cp packaging/usb-pasteur.toml usb-pasteur.toml   # then set fake_scan = true
 usb-pasteur --config usb-pasteur.toml --check-config
 sudo .venv/bin/usb-pasteur --config usb-pasteur.toml --interface console
 ```
 
+`sudo` resets `PATH`, so the kiosk is started with the full path of the executable installed in the virtual environment (`.venv/bin/usb-pasteur`).
+
 In `FAKE_SCAN` mode, only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
+
+#### Lint and tests
+
+With the virtual environment activated:
+
+```sh
+ruff check .
+mypy src
+pytest
+```
 
 ## Phase 1 — Scanning engine (MVP)
 

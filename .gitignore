@@ -15,3 +15,6 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Local development configuration
+/usb-pasteur.toml
