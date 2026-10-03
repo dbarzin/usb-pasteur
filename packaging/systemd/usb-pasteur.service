@@ -44,6 +44,7 @@ ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
@@ -56,6 +57,10 @@ LockPersonality=yes
 # time (wasmtime) and fails with it. Phase 2 restores it for every process but
 # the sandboxed YARA analyzer.
 SystemCallArchitectures=native
+# Mounting the device needs the mount system calls
+SystemCallFilter=@system-service @mount
+SystemCallErrorNumber=EPERM
+KeyringMode=private
 IPAddressDeny=any
 
 [Install]

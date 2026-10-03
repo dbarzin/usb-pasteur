@@ -35,3 +35,6 @@ clamd_option StreamMaxLength 100M
 # package from the devices of the build machine; only root may use it
 rm -f /etc/usbguard/IPCAccessControl.d/*
 chmod 0600 /etc/usbguard/rules.conf /etc/usbguard/usbguard-daemon.conf
+
+# A keyboard cannot reboot the kiosk (Ctrl-Alt-Del)
+systemctl mask ctrl-alt-del.target

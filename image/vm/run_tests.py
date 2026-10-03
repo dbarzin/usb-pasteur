@@ -263,6 +263,54 @@ def check_usb_policy(vm: Machine) -> None:
     )
 
 
+SYSCTL = {
+    "kernel.dmesg_restrict": "1",
+    "kernel.kptr_restrict": "2",
+    "kernel.yama.ptrace_scope": "3",
+    "kernel.kexec_load_disabled": "1",
+    "kernel.unprivileged_bpf_disabled": "1",
+    "kernel.unprivileged_userns_clone": "0",
+    "kernel.io_uring_disabled": "2",
+    "kernel.sysrq": "0",
+    "fs.suid_dumpable": "0",
+}
+KERNEL_OPTIONS = ("init_on_free=1", "slab_nomerge", "vsyscall=none", "lockdown=confidentiality")
+
+
+def check_hardening(vm: Machine) -> None:
+    step("system hardening")
+    values = dict(
+        line.split(" = ", 1) for line in vm.shell.run(f"sysctl {' '.join(SYSCTL)}").splitlines()
+    )
+    check(values == SYSCTL, f"sysctl: {values}")
+    options = vm.shell.run("cat /proc/cmdline").split()
+    missing = [o for o in KERNEL_OPTIONS if o not in options]
+    check(not missing, f"kernel options missing: {missing}")
+    lockdown = vm.shell.run("cat /sys/kernel/security/lockdown").strip()
+    check("[confidentiality]" in lockdown, f"kernel lockdown: {lockdown}")
+    # No login prompt on the screens of the kiosk (the test image has a
+    # serial console only)
+    gettys = vm.shell.run("ps -o tty= -C agetty || true").split()
+    check(not [t for t in gettys if t.startswith("tty") and t[3:].isdigit()], f"gettys: {gettys}")
+    masked = vm.shell.run("systemctl show -P LoadState ctrl-alt-del.target").strip()
+    check(masked == "masked", f"ctrl-alt-del.target: {masked}")
+    policies = vm.shell.run("nft list ruleset").count("policy drop;")
+    check(policies == 3, f"firewall: {policies} chains dropping by default, 3 expected")
+    clamd = vm.shell.run(
+        "systemctl show -P PrivateNetwork -P MemoryDenyWriteExecute clamav-daemon"
+    ).split()
+    check(clamd == ["yes", "yes"], f"clamd sandbox: {clamd}")
+    check(vm.shell.run("ps -o user= -C clamd").strip() == "clamav", "clamd does not run as clamav")
+    # Overview of all the units: "NAME EXPOSURE PREDICATE HAPPY"
+    exposure = vm.shell.run(
+        "systemd-analyze security --no-pager"
+        " | grep -E '^(usb-pasteur|clamav-daemon|usbguard)\\.service' || true"
+    )
+    print("sysctl, kernel options, lockdown, firewall, no login console: OK")
+    units = [" ".join(line.split()[:2]) for line in exposure.splitlines()]
+    print("systemd exposure (0 to 10):", ", ".join(units))
+
+
 def count_reports(vm: Machine) -> int:
     return int(vm.shell.run(f"ls {REPORTS} | wc -l"))
 
@@ -381,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
                 check_usb_policy(vm)
+                check_hardening(vm)
                 check_reboot(vm, args.boot_timeout)
             current = workdir / "modified-root"
             check_modified_root(image, current, args.boot_timeout)

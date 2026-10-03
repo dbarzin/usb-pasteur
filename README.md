@@ -173,7 +173,7 @@ Goal: ship a ready-to-flash system image with the smallest possible attack surfa
 
 ### Current status
 
-A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. It is not fully hardened yet (sandboxing, firewall), and the production image has no signatures. See [docs/image.md](docs/image.md):
+A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox), but the analyzers are not sandboxed yet, and the production image has no signatures. See [docs/image.md](docs/image.md):
 
 ```sh
 image/build.sh --profile test   # build the test image (Docker only)
@@ -211,15 +211,16 @@ Tasks:
 
 ### Hardening
 
-- [ ] No interactive account by default, no SSH (explicitly enabled in maintenance mode only)
-- [ ] Hardened kernel settings (`sysctl`, `lockdown`, unused modules disabled)
-- [ ] `nftables` firewall: deny all by default
+- [x] No interactive account by default, no SSH: no `login` program, no root password, no login console, Ctrl-Alt-Del masked
+- [ ] Maintenance mode (explicitly enabled SSH or console)
+- [x] Hardened kernel settings (`sysctl`, `lockdown=confidentiality`, memory initialization, IOMMU, unused modules removed)
+- [x] `nftables` firewall: deny all by default
 - [x] **USBGuard**: only mass-storage devices (and hubs) are allowed (BadUSB protection), no device is authorized before USBGuard starts (`usbcore.authorized_default=0`)
 - [x] No USB network, wireless, Bluetooth, USB serial and modem drivers in the image; USB HID is kept for the touchscreen, keyboards and mice are blocked by USBGuard
 - [ ] USBGuard rule allowing the touchscreen of the reference hardware
-- [ ] Devices mounted with `ro,noexec,nosuid,nodev`, no automount
-- [ ] Limited set of supported filesystems (vfat, exfat, ntfs3, ext4)
-- [ ] Hardened systemd services (`ProtectSystem`, `PrivateNetwork`, `NoNewPrivileges`, seccomp filters)
+- [x] Devices mounted with `ro,noexec,nosuid,nodev` by the kiosk, no automount (no udisks in the image)
+- [x] Limited set of supported filesystems (vfat, exfat, ntfs3, ext4): the kiosk refuses to mount any other
+- [x] Hardened systemd services (`ProtectSystem`, `NoNewPrivileges`, seccomp filters; `PrivateNetwork` and `MemoryDenyWriteExecute` for clamd), exposure measured by `systemd-analyze security` in the virtual machine test
 - [ ] Each analyzer runs in a `bubblewrap` sandbox, without network, under a dedicated user
 - [ ] Audit log (`auditd`) for sensitive operations
 - [ ] Assessment with `lynis` and the ANSSI configuration recommendations for GNU/Linux systems

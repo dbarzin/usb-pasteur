@@ -7,7 +7,7 @@ container (`image/Dockerfile`: mkosi, QEMU, OVMF), so the developer only needs
 Docker.
 
 > [!WARNING]
-> The image is not fully hardened yet (sandboxing, firewall), it is signed
+> The analyzers are not sandboxed yet, the image is signed
 > with development keys only, and the production image has no signatures yet
 > (the kiosk refuses to start until signature updates exist).
 > See the phase 2 tasks in the [README](../README.md#phase-2--minimal-hardened-image).
@@ -21,7 +21,7 @@ Docker.
 | `image/mkosi.prepare.chroot` | Runtime dependencies in a virtual environment (`/usr/lib/usb-pasteur`), from `image/requirements.txt` (pinned with their hashes) |
 | `image/mkosi.build.chroot` | usb-pasteur wheel, built from the repository without network |
 | `image/mkosi.postinst.chroot` | Installs usb-pasteur, its configuration, systemd service, tmpfiles and logrotate files (`packaging/`), and the clamd settings |
-| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units), `/etc/fstab`, growth of the data partition (`/usr/lib/repart.d/`), USBGuard policy |
+| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units), `/etc/fstab`, growth of the data partition (`/usr/lib/repart.d/`), USBGuard policy, kernel settings (`sysctl.d`), firewall (`nftables.conf`), clamd sandbox |
 | `image/mkosi.profiles/test/` | Test profile, for the virtual machine tests only |
 | `image/vm/` | Virtual machine tests: corpus, QEMU driver, automated test |
 | `image/build.sh`, `image/vm.sh` | Build and run in the container |
@@ -132,6 +132,37 @@ A kiosk must only use USB storage devices: a key that is also a keyboard
   chosen; until then, every keyboard, mouse and touchscreen is blocked. The
   virtual machines are not affected: their keyboard is not a USB device.
 
+## System hardening
+
+After the ANSSI configuration recommendations for GNU/Linux systems:
+
+- **Kernel settings** (`/usr/lib/sysctl.d/90-usb-pasteur.conf`): kernel
+  logs and addresses hidden, no ptrace, no kexec, no unprivileged eBPF, user
+  namespaces or userfaultfd, io_uring disabled, no SysRq, no core dumps,
+  protected links and FIFOs, no IP forwarding or redirects.
+- **Kernel command line**: memory initialized on allocation and free, no
+  slab merging, randomized page allocator and kernel stack, no legacy
+  vsyscall, no debugfs, lockdown in `confidentiality` mode (Secure Boot only
+  enables `integrity`: even root cannot read kernel memory), IOMMU in strict
+  mode and no DMA before the kernel starts (DMA attacks through ports).
+- **Firewall** (`/etc/nftables.conf`): every packet is dropped, in and out,
+  except on the loopback interface.
+- **No login**: no login console on the screens (`getty@` and `getty-static`
+  disabled), no `login` program, no root password, Ctrl-Alt-Del masked.
+- **clamd sandbox** (`clamav-daemon.service.d/50-usb-pasteur.conf`): no
+  network, read-only system, no device, system call filter,
+  `MemoryDenyWriteExecute` (the Debian clamd interprets bytecode signatures,
+  without JIT); it runs as the `clamav` user.
+- **Kiosk service** (`packaging/systemd/usb-pasteur.service`): read-only
+  system, system call filter, limited capabilities. It keeps `AF_NETLINK`
+  (udev events) and cannot have `MemoryDenyWriteExecute` while the YARA-X
+  workers (which compile rules to native code) run inside it: the analyzer
+  sandbox is the next step.
+
+The virtual machine test checks these settings and prints the exposure of
+the services measured by `systemd-analyze security` (0 to 10, lower is
+better): about 1.6 for clamd, 2.7 for the kiosk, 2.8 for USBGuard.
+
 ## Dependencies
 
 Runtime dependencies are pinned with their hashes in `image/requirements.txt`.
@@ -178,7 +209,8 @@ the virtio console:
 7. the key is removed: only the clean files are left on it;
 8. the cleaned key is inserted again and reported clean; an emulated USB
    keyboard and network adapter are blocked by USBGuard (no input device, no
-   network interface) and the excluded drivers are not in the image;
+   network interface) and the excluded drivers are not in the image; the
+   kernel settings, the firewall and the service sandboxes are in place;
 9. after a reboot, the scan reports are still there and the root filesystem
    is unchanged.
 

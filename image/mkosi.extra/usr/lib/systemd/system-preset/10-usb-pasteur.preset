@@ -6,6 +6,7 @@ enable clamav-daemon.socket
 enable clamav-daemon.service
 enable logrotate.timer
 enable usbguard.service
+enable nftables.service
 
 # No network: signature updates come through a dedicated channel (phase 2)
 disable clamav-freshclam.service
@@ -16,6 +17,14 @@ disable systemd-network-generator.service
 disable systemd-resolved.service
 disable systemd-timesyncd.service
 disable remote-fs.target
+
+# No login console: the kiosk owns the first console. Only the test image
+# has a shell, on the virtio console (serial-getty@hvc0, from the generator).
+disable getty@.service
+disable getty-static.service
+# Ctrl-Alt-Del is an alias of reboot.target: not enabled, so that the mask of
+# ctrl-alt-del.target (mkosi.postinst.chroot) is kept
+disable reboot.target
 
 # Not used on the kiosk
 disable clamav-clamonacc.service
