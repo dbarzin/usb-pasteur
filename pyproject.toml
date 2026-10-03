@@ -26,6 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "pyudev>=0.24",
+    "python-magic>=0.4.24",
 ]
 
 [project.optional-dependencies]

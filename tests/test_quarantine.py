@@ -4,6 +4,7 @@ import json
 import stat
 from pathlib import Path
 
+from usb_pasteur.config import LimitsConfig
 from usb_pasteur.engines import FakeEngine
 from usb_pasteur.engines.fake import EICAR
 from usb_pasteur.quarantine import Quarantine
@@ -11,7 +12,7 @@ from usb_pasteur.scanner import Scanner
 
 
 def test_store(usb_tree: Path, tmp_path: Path) -> None:
-    summary = Scanner([FakeEngine()], workers=1, max_file_size=1000).scan_tree(usb_tree)
+    summary = Scanner([FakeEngine()], 1, LimitsConfig()).scan_tree(usb_tree)
     folder = Quarantine(tmp_path / "q").store(summary.infected, usb_tree)
     assert folder is not None
     stored = folder / "00001.bin"

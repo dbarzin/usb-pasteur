@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
 
+from usb_pasteur.filetype import FileTypeDetector, magic_version
+from usb_pasteur.hashing import hash_fd
 from usb_pasteur.lock import AlreadyRunningError, InstanceLock
 from usb_pasteur.logs import get_logger, log_event, setup_logging
 from usb_pasteur.statemachine import State, StateMachine
-from usb_pasteur.text import human_size, printable
+from usb_pasteur.text import escape, human_size, path_b64, printable
 
 
 def test_human_size() -> None:
@@ -70,3 +75,44 @@ def test_json_logs(tmp_path: Path) -> None:
     assert entry["path"] == "bad-\udcff"
     assert entry["level"] == "INFO"
     setup_logging("kiosk-01", "INFO", None)
+
+
+def test_escape() -> None:
+    assert escape("docs/report.pdf") == "docs/report.pdf"
+    assert escape(os.fsdecode(b"bad-\xff.txt")) == "bad-\\xff.txt"
+    assert escape("esc\x1b[2J\nx") == "esc\\x1b[2J\\x0ax"
+    assert escape("a\\b") == "a\\\\b"
+    assert escape("rtl-‮.exe") == "rtl-\\u202e.exe"
+    assert escape("tag-\U000e0041") == "tag-\\U000e0041"
+    assert escape("été") == "été"
+    escape(os.fsdecode(b"\xff")).encode("utf-8")  # always valid UTF-8
+
+
+def test_path_b64() -> None:
+    assert base64.b64decode(path_b64(os.fsdecode(b"bad-\xff"))) == b"bad-\xff"
+
+
+def test_hash_fd(tmp_path: Path) -> None:
+    data = os.urandom(3 * 1024 + 5)
+    (tmp_path / "f").write_bytes(data)
+    fd = os.open(tmp_path / "f", os.O_RDONLY)
+    try:
+        hashes = hash_fd(fd, chunk_size=1024)
+    finally:
+        os.close(fd)
+    assert hashes.size == len(data)
+    assert hashes.sha256 == hashlib.sha256(data).hexdigest()
+    assert hashes.sha1 == hashlib.sha1(data).hexdigest()
+    assert hashes.md5 == hashlib.md5(data).hexdigest()
+
+
+def test_file_type(tmp_path: Path) -> None:
+    (tmp_path / "f.pdf").write_bytes(b"%PDF-1.4\n")
+    fd = os.open(tmp_path / "f.pdf", os.O_RDONLY)
+    try:
+        file_type = FileTypeDetector().identify(fd)
+    finally:
+        os.close(fd)
+    assert file_type.mime == "application/pdf"
+    assert file_type.description is not None and file_type.description.startswith("PDF")
+    assert magic_version()

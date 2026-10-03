@@ -4,32 +4,44 @@ import hashlib
 import os
 from pathlib import Path
 
+from usb_pasteur.config import LimitsConfig
 from usb_pasteur.engines import Engine, EngineResult, FakeEngine, FileInfo, Verdict
 from usb_pasteur.scanner import FileResult, Scanner
+
+LIMITS = LimitsConfig(max_file_size=1000, max_files=1000, max_depth=10)
 
 
 def test_scan_tree(usb_tree: Path) -> None:
     (usb_tree / "big.iso").write_bytes(b"0" * 2000)
     (usb_tree / "link").symlink_to("/etc/passwd")
     os.mkfifo(usb_tree / "fifo")
-    progress: list[int] = []
+    progress: list[tuple[int, int]] = []
 
-    def on_progress(result: FileResult, scanned: int) -> None:
-        progress.append(scanned)
+    def on_progress(result: FileResult, done: int, total: int) -> None:
+        progress.append((done, total))
 
-    scanner = Scanner([FakeEngine()], workers=2, max_file_size=1000)
-    summary = scanner.scan_tree(usb_tree, on_progress)
+    summary = Scanner([FakeEngine()], 2, LIMITS).scan_tree(usb_tree, on_progress)
 
-    verdicts = {f.path.name: f.verdict for f in summary.files}
+    verdicts = {f.rel_path: f.verdict for f in summary.files}
     assert verdicts == {
         "readme.txt": Verdict.CLEAN,
-        "report.pdf": Verdict.CLEAN,
-        "eicar.com": Verdict.MALICIOUS,
+        "docs/report.pdf": Verdict.CLEAN,
+        "docs/eicar.com": Verdict.MALICIOUS,
         "big.iso": Verdict.SKIPPED,
+        "link": Verdict.SKIPPED,
+        "fifo": Verdict.SKIPPED,
     }
     assert [f.path.name for f in summary.infected] == ["eicar.com"]
-    assert len(progress) == 4
-    assert progress == sorted(progress)
+    assert progress == [(i, 6) for i in range(1, 7)]
+    # The big file was not scanned: the device was not fully scanned
+    assert [f.rel_path for f in summary.unscanned] == ["big.iso"]
+    assert not summary.complete
+
+
+def test_complete_scan(usb_tree: Path) -> None:
+    summary = Scanner([FakeEngine()], 2, LIMITS).scan_tree(usb_tree)
+    assert summary.complete
+    assert summary.unscanned == []
 
 
 def test_engine_failure_is_an_error(tmp_path: Path) -> None:
@@ -40,26 +52,35 @@ def test_engine_failure_is_an_error(tmp_path: Path) -> None:
             raise RuntimeError("boom")
 
     (tmp_path / "file").write_text("x")
-    summary = Scanner([Broken()], workers=1, max_file_size=100).scan_tree(tmp_path)
+    summary = Scanner([Broken()], 1, LIMITS).scan_tree(tmp_path)
     assert summary.files[0].verdict is Verdict.ERROR
-    assert summary.files[0].results[0].error == "boom"
+    assert summary.files[0].results[0].error == "RuntimeError: boom"
+    assert not summary.complete
 
 
 def test_many_files(tmp_path: Path) -> None:
     for i in range(50):
         (tmp_path / f"f{i}").write_text(str(i))
-    summary = Scanner([FakeEngine()], workers=3, max_file_size=100).scan_tree(tmp_path)
+    summary = Scanner([FakeEngine()], 3, LIMITS).scan_tree(tmp_path)
     assert summary.count(Verdict.CLEAN) == 50
 
 
 def test_file_info(usb_tree: Path) -> None:
-    summary = Scanner([FakeEngine()], workers=1, max_file_size=1000).scan_tree(usb_tree)
-    infos = {f.path.name: f.info for f in summary.files}
+    summary = Scanner([FakeEngine()], 1, LIMITS).scan_tree(usb_tree)
+    infos = {f.rel_path: f.info for f in summary.files}
     readme = infos["readme.txt"]
     assert readme is not None
-    assert readme.rel_path == "readme.txt"
     assert readme.sha256 == hashlib.sha256(b"hello").hexdigest()
     assert readme.sha1 == hashlib.sha1(b"hello").hexdigest()
     assert readme.md5 == hashlib.md5(b"hello").hexdigest()
-    report = infos["report.pdf"]
-    assert report is not None and report.rel_path == "docs/report.pdf"
+    assert readme.mime == "text/plain"
+    assert readme.description is not None and "text" in readme.description
+    report = infos["docs/report.pdf"]
+    assert report is not None and report.mime == "application/pdf"
+
+
+def test_missing_root(tmp_path: Path) -> None:
+    summary = Scanner([FakeEngine()], 1, LIMITS).scan_tree(tmp_path / "missing")
+    assert summary.files == []
+    assert not summary.complete
+    assert "cannot read the device" in summary.incomplete_reasons[0]

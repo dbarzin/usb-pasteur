@@ -4,7 +4,7 @@ FROM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        python3 python3-venv dosfstools exfatprogs e2fsprogs mount util-linux \
+        python3 python3-venv libmagic1 dosfstools exfatprogs e2fsprogs mount util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

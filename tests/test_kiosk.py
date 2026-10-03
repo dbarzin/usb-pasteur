@@ -116,7 +116,7 @@ class SuspiciousEngine(FakeEngine):
 
     def scan(self, file: FileInfo) -> EngineResult:
         if file.rel_path.endswith(".suspect"):
-            return EngineResult("suspicious", Verdict.SUSPICIOUS, ("Heuristic",))
+            return EngineResult(self.name, Verdict.SUSPICIOUS, ("Heuristic",))
         return super().scan(file)
 
 

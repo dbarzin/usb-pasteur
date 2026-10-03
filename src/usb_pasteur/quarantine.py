@@ -11,6 +11,7 @@ from pathlib import Path
 
 from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.scanner import FileResult
+from usb_pasteur.text import escape
 
 logger = get_logger("quarantine")
 
@@ -36,7 +37,7 @@ class Quarantine:
             name = f"{index:05d}.bin"
             entry: dict[str, object] = {
                 "file": name,
-                "original_path": str(result.path.relative_to(root)),
+                "original_path": escape(result.rel_path),
                 "size": result.size,
                 "detections": {r.engine: r.detail for r in result.results if r.detail},
             }

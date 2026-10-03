@@ -48,7 +48,7 @@ class Kiosk:
         self.config = config
         self.display = display
         self.source = source
-        self.scanner = Scanner(engines, config.scan.workers, config.limits.max_file_size)
+        self.scanner = Scanner(engines, config.scan.workers, config.limits)
         self.mounter = mounter or Mounter(
             config.device.mount_point,
             config.device.allowed_filesystems,
@@ -147,9 +147,9 @@ class Kiosk:
         self.display.message("Scanning...")
         self.display.progress(0)
 
-        def on_progress(result: FileResult, scanned: int) -> None:
+        def on_progress(result: FileResult, done: int, total: int) -> None:
             self.display.message(describe(result))
-            self.display.progress(min(99, scanned * 100 // used))
+            self.display.progress(min(99, done * 100 // max(1, total)))
 
         self.summary = self.scanner.scan_tree(root, on_progress)
         self.display.progress(100)
@@ -217,7 +217,7 @@ class Kiosk:
     def _list(self, title: str, results: list[FileResult]) -> None:
         self.display.message(title)
         for result in results[:_MAX_LISTED]:
-            self.display.message(str(result.path.relative_to(self.mounter.mount_point)))
+            self.display.message(result.rel_path)
         if len(results) > _MAX_LISTED:
             self.display.message("...")
 
