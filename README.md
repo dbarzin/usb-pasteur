@@ -4,9 +4,9 @@
 Successor to [pandora-box](https://github.com/dbarzin/pandora-box), with no dependency on Pandora (CIRCL).
 
 > [!WARNING]
-> **USB-Pasteur is under active development and is not usable yet.**
-> No real detection engine is integrated: the kiosk only runs in `FAKE_SCAN` mode, which detects nothing but the EICAR test file.
-> **Do not use it to check USB devices.** Until the first release, use a supported commercial or open source solution.
+> **USB-Pasteur is under active development and is not production-ready.**
+> The scanning engine (phase 1) works, but signature updates are not verified and the system is not hardened yet (phase 2).
+> **Do not rely on it to check USB devices.** Until the first release, use a supported commercial or open source solution.
 
 ## Vision
 
@@ -64,15 +64,21 @@ The pandora-box code has been ported to the `usb_pasteur` package (`src/usb_past
 | `statemachine.py`, `kiosk.py` | State machine and kiosk workflow |
 | `monitor.py` | USB detection with udev |
 | `device.py` | Hardened mounting (`ro,noexec,nosuid,nodev`, read-write only to clean) |
-| `scanner.py` | Parallel scan of the device files |
-| `engines/` | Engine interface and fake engine (`FAKE_SCAN`) |
-| `quarantine.py` | Copy of infected files with a manifest |
+| `inventory.py` | Device inventory: never follows links, never leaves the device, limits |
+| `scanner.py`, `workers.py` | Scan in supervised worker processes, timeouts and watchdog |
+| `pipeline.py`, `hashing.py`, `filetype.py` | Per file: hashes (SHA-256, SHA-1, MD5), libmagic type, engines |
+| `engines/` | Engine interface, MalwareBazaar, Hashlookup, ClamAV, YARA-X and fake engine |
+| `hashdb.py`, `bloom.py`, `clamd.py` | MalwareBazaar database, DCSO Bloom filter reader, clamd client |
+| `policy.py` | Verdict aggregation per file and per device |
+| `report.py`, `schemas/` | JSON scan report and its JSON Schema |
+| `signatures.py` | Signature provenance and freshness, verification hook (phase 2) |
+| `quarantine.py` | Copy of infected files with a manifest referencing the report |
 | `ui/` | Curses (administrator) and console interfaces |
 | `logs.py`, `lock.py` | JSON logs, single-instance lock |
 
 Deployment files are in `packaging/`: example configuration, systemd service and logrotate.
 
-No real detection engine is available until phase 1: the kiosk refuses to start unless `FAKE_SCAN` mode is enabled.
+The detection engines, their data files and the verdict policy are described in [docs/engines.md](docs/engines.md). Every engine is enabled by default: the kiosk refuses to start when an enabled engine cannot load its signatures, or when no content engine (ClamAV or YARA-X) is enabled.
 
 ### Quick start (development)
 
@@ -80,6 +86,8 @@ No real detection engine is available until phase 1: the kiosk refuses to start 
 
 - Linux with udev (USB detection and mounting require root privileges)
 - **Python 3.11 or later**
+- libmagic (`sudo apt install libmagic1`)
+- for real scans: `clamav-daemon` (see [docs/engines.md](docs/engines.md#clamav))
 
 Recent distributions (Debian 12 and later, Ubuntu 23.04 and later) forbid `pip install` into the system Python ([PEP 668](https://peps.python.org/pep-0668/), `externally-managed-environment` error). Always work inside a virtual environment, and never use `--break-system-packages`.
 
@@ -111,14 +119,18 @@ uv pip install -e ".[dev]"
 #### Configure and run
 
 ```sh
-cp packaging/usb-pasteur.toml usb-pasteur.toml   # then set fake_scan = true
+cp packaging/usb-pasteur.toml usb-pasteur.toml
+# development helper: YARA rules, MalwareBazaar (needs ABUSECH_AUTH_KEY), Hashlookup
+python scripts/fetch-dev-signatures.py --dest dev-signatures
+# copy the printed [engines.*] settings into usb-pasteur.toml, set the
+# quarantine, report and log folders, then check the configuration
 usb-pasteur --config usb-pasteur.toml --check-config
 sudo .venv/bin/usb-pasteur --config usb-pasteur.toml --interface console
 ```
 
 `sudo` resets `PATH`, so the kiosk is started with the full path of the executable installed in the virtual environment (`.venv/bin/usb-pasteur`).
 
-In `FAKE_SCAN` mode, only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
+To work on the workflow without signatures, set `fake_scan = true` in `[kiosk]` (or use `--fake-scan`): only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
 
 #### Lint and tests
 
@@ -130,22 +142,26 @@ mypy src
 pytest
 ```
 
+Integration tests run against real engines when they are available: a clamd socket (`USB_PASTEUR_CLAMD_SOCKET`, default `/run/clamav/clamd.ctl`), real rules (`USB_PASTEUR_YARA_RULES`, paths separated by `:`) or a full configuration for the detection corpus (`USB_PASTEUR_CORPUS_CONFIG`). End-to-end tests with loop devices and a real clamd run in a container: `tests/e2e/run.sh`.
+
 ## Phase 1 — Scanning engine (MVP)
 
 Goal: replace Pandora with an equivalent or better local pipeline.
 
-- [ ] Common plugin interface: `scan(file) -> Verdict` (clean, suspicious, malicious, error, skipped)
-- [ ] Device inventory and hash computation (SHA-256, SHA-1, MD5)
-- [ ] **Hashlookup (CIRCL)** as an offline Bloom filter: skip files known to be clean
-- [ ] **MalwareBazaar**: offline list of malicious hashes
-- [ ] **ClamAV** through `clamd` (Unix socket) + third-party signatures
-- [ ] **YARA-X** + YARA Forge and signature-base rules
-- [ ] Real file type identification (`libmagic`)
-- [ ] Parallel engine execution (process pool), timeout per file and per engine
-- [ ] Verdict aggregation with a configurable policy (one positive engine is enough, etc.); suspicious policy (`block` / `warn`) already configurable
-- [ ] Limits: maximum file size, number of files, directory depth
-- [ ] JSON scan report (device, files, verdicts, engines, signature versions)
-- [ ] Test set: EICAR, harmless samples, known false positives
+- [x] Common plugin interface: `scan(file) -> Verdict` (clean, suspicious, malicious, error, skipped)
+- [x] Device inventory and hash computation (SHA-256, SHA-1, MD5)
+- [x] **Hashlookup (CIRCL)** as an offline Bloom filter: skip the content engines for known files (known does not mean benign)
+- [x] **MalwareBazaar**: offline list of malicious hashes
+- [x] **ClamAV** through `clamd` (Unix socket) + third-party signatures
+- [x] **YARA-X** + YARA Forge and signature-base rules
+- [x] Real file type identification (`libmagic`)
+- [x] Parallel scan in supervised worker processes, timeout per file and per engine
+- [x] Verdict aggregation with a configurable policy (one positive engine is enough, etc.); `scan.suspicious` and `scan.on_error` policies (`block` / `warn`)
+- [x] Limits: maximum file size, number of files, directory depth
+- [x] JSON scan report (device, files, verdicts, engines, signature versions) with a JSON Schema
+- [x] Test set: EICAR, harmless samples, known false positives (`tests/corpus/`)
+
+See [docs/engines.md](docs/engines.md) for the engines and the verdict policy.
 
 ## Phase 2 — Minimal hardened image
 
@@ -252,6 +268,9 @@ Tasks:
 ## Decisions
 
 - Policy for a "suspicious" verdict: configurable with `scan.suspicious`, `block` (default) or `warn`.
+- Policy for files that could not be fully scanned (engine error or timeout, limits): configurable with `scan.on_error`. `block` (default) reports the device as not verified; unscanned files are listed but never removed, since they are not known to be malicious.
+- A Hashlookup hit means "known file", not "benign file": content engines are skipped for known files by default (`engines.hashlookup.skip_content_engines`), a malicious hash always wins, and the decision is recorded in the scan report.
+- YARA Forge already includes signature-base: only YARA Forge `core` is configured by default, signature-base is opt-in.
 
 ## Contributing
 

@@ -1,10 +1,12 @@
 # End-to-end test environment, based on the target system (Debian 13 trixie).
 # Run with tests/e2e/run.sh: the container must be privileged to use loop devices.
+# clamav-daemon is started by the tests with a test-only signature database.
 FROM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        python3 python3-venv libmagic1 dosfstools exfatprogs e2fsprogs mount util-linux \
+        python3 python3-venv libmagic1 clamav-daemon \
+        dosfstools exfatprogs e2fsprogs mount util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

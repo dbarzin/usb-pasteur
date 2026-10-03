@@ -5,22 +5,34 @@ Requires root, loop devices and mkfs tools: run it with tests/e2e/run.sh.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
+import tempfile
+import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+import jsonschema
 import pytest
 
+from usb_pasteur.bloom import write_filter
 from usb_pasteur.config import parse_config
 from usb_pasteur.device import Mounter, UsbDevice
-from usb_pasteur.engines.fake import EICAR
+from usb_pasteur.engines import FileInfo, Verdict
+from usb_pasteur.engines.clamav import ClamavEngine
+from usb_pasteur.hashdb import write_database
 from usb_pasteur.kiosk import Kiosk, build_pool
 from usb_pasteur.monitor import Action, DeviceEvent
+from usb_pasteur.report import load_schema
 
 from ..conftest import ListSource, RecordingDisplay
+from ..samples import eicar
+
+EICAR = eicar()
 
 pytestmark = [
     pytest.mark.e2e,
@@ -59,9 +71,9 @@ def mount_options(node: str) -> list[str]:
     return []
 
 
-@pytest.fixture(params=sorted(MKFS))
-def usb_key(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[UsbDevice]:
-    fs_type: str = request.param
+@contextmanager
+def make_key(tmp_path: Path, fs_type: str, files: dict[str, bytes]) -> Iterator[UsbDevice]:
+    """A disk image with the given files, attached to a loop device."""
     if shutil.which(MKFS[fs_type][0]) is None:
         pytest.skip(f"{MKFS[fs_type][0]} not installed")
     image = tmp_path / f"{fs_type}.img"
@@ -70,20 +82,41 @@ def usb_key(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[UsbDevic
     run(*MKFS[fs_type], str(image))
     node = attach(image)
     try:
-        # Populate the key
         populate = tmp_path / "populate"
         populate.mkdir()
         run("mount", "-t", fs_type, node, str(populate))
-        (populate / "docs").mkdir()
-        (populate / "readme.txt").write_text("hello")
-        (populate / "docs" / "report.pdf").write_bytes(b"%PDF-1.4 harmless")
-        (populate / "docs" / "eicar.com").write_bytes(EICAR)
-        (populate / "eicar copy.txt").write_bytes(EICAR + b"\n")
+        for name, content in files.items():
+            (populate / name).parent.mkdir(parents=True, exist_ok=True)
+            (populate / name).write_bytes(content)
         run("umount", str(populate))
         yield UsbDevice(node=node, fs_type=fs_type, label="USBKEY", model="Loop")
     finally:
         subprocess.run(["umount", str(tmp_path / "populate")], capture_output=True)
         subprocess.run(["losetup", "-d", node], capture_output=True)
+
+
+def key_files(node: str, tmp_path: Path) -> list[str]:
+    """Files left on the key, read from a fresh read-only mount."""
+    check = tmp_path / "check"
+    check.mkdir()
+    run("mount", "-o", "ro", node, str(check))
+    try:
+        files = sorted(str(p.relative_to(check)) for p in check.rglob("*") if p.is_file())
+    finally:
+        run("umount", str(check))
+    return [f for f in files if not f.startswith("lost+found")]
+
+
+@pytest.fixture(params=sorted(MKFS))
+def usb_key(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[UsbDevice]:
+    files = {
+        "readme.txt": b"hello",
+        "docs/report.pdf": b"%PDF-1.4 harmless",
+        "docs/eicar.com": EICAR,
+        "eicar copy.txt": EICAR + b"\n",
+    }
+    with make_key(tmp_path, request.param, files) as key:
+        yield key
 
 
 def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
@@ -126,14 +159,151 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
     assert quarantined == {"docs/eicar.com", "eicar copy.txt"}
 
     # Infected files are removed from the key, clean files are kept
-    check = tmp_path / "check"
-    check.mkdir()
-    run("mount", "-o", "ro", usb_key.node, str(check))
+    assert key_files(usb_key.node, tmp_path) == ["docs/report.pdf", "readme.txt"]
+
+
+# -- Real engines -------------------------------------------------------------
+
+YARA_RULE = """
+rule UsbPasteur_E2E_Marker {
+    meta: score = 90
+    strings: $a = "USB-PASTEUR-E2E-YARA-MARKER"
+    condition: $a
+}
+"""
+MALWAREBAZAAR_SAMPLE = b"pretend malware sample listed in MalwareBazaar\n"
+KNOWN_FILE = b"a well known file listed in hashlookup\n"
+
+
+@pytest.fixture
+def clamd() -> Iterator[Path]:
+    """A real clamd with a test-only database: it only detects EICAR."""
+    executable = shutil.which("clamd") or "/usr/sbin/clamd"
+    if not Path(executable).exists():
+        pytest.skip("clamd not installed")
+    # Short path: Unix socket paths are limited to 108 bytes
+    folder = Path(tempfile.mkdtemp(prefix="clamd-"))
+    database = folder / "db"
+    database.mkdir()
+    (database / "usb-pasteur-test.hdb").write_text(
+        f"{hashlib.md5(EICAR).hexdigest()}:{len(EICAR)}:UsbPasteur.Test.EICAR\n"
+    )
+    socket_path = folder / "clamd.sock"
+    config = folder / "clamd.conf"
+    config.write_text(
+        f"LocalSocket {socket_path}\n"
+        f"DatabaseDirectory {database}\n"
+        f"TemporaryDirectory {folder}\n"
+        "Foreground yes\n"
+        "AlertExceedsMax yes\n"
+    )
+    process = subprocess.Popen([executable, "--config-file", str(config)])
     try:
-        files = sorted(str(p.relative_to(check)) for p in check.rglob("*") if p.is_file())
+        deadline = time.monotonic() + 60
+        while not socket_path.exists():
+            assert process.poll() is None, "clamd exited"
+            assert time.monotonic() < deadline, "clamd did not start"
+            time.sleep(0.2)
+        yield socket_path
     finally:
-        run("umount", str(check))
-    assert [f for f in files if not f.startswith("lost+found")] == [
-        "docs/report.pdf",
-        "readme.txt",
+        process.terminate()
+        process.wait(timeout=30)
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+@pytest.mark.parametrize("fs_type", ["vfat", "ext4"])
+def test_real_engines(fs_type: str, clamd: Path, tmp_path: Path) -> None:
+    files = {
+        "readme.txt": b"hello",
+        "docs/eicar.com": EICAR,
+        "docs/marker.bin": b"xx USB-PASTEUR-E2E-YARA-MARKER xx",
+        "sample.bin": MALWAREBAZAAR_SAMPLE,
+        "known.txt": KNOWN_FILE,
+    }
+    signatures = tmp_path / "signatures"
+    signatures.mkdir()
+    write_database([hashlib.sha256(MALWAREBAZAAR_SAMPLE).digest()], signatures / "mb.bin")
+    write_filter(
+        signatures / "known.bloom", [hashlib.sha1(KNOWN_FILE).hexdigest().upper().encode()]
+    )
+    (signatures / "rules.yar").write_text(YARA_RULE)
+    mount_point = tmp_path / "media"
+    mount_point.mkdir()
+    config = parse_config(
+        {
+            "kiosk": {"name": "e2e", "interface": "console"},
+            "device": {"mount_point": str(mount_point)},
+            "engines": {
+                "malwarebazaar": {"database": str(signatures / "mb.bin")},
+                "hashlookup": {"bloom": str(signatures / "known.bloom")},
+                "clamav": {"socket": str(clamd)},
+                "yara": {
+                    "rules": [{"name": "e2e", "path": str(signatures / "rules.yar")}],
+                    "cache_dir": str(tmp_path / "cache"),
+                },
+            },
+            "quarantine": {"folder": str(tmp_path / "quarantine")},
+            "report": {"folder": str(tmp_path / "reports")},
+            "logging": {"file": str(tmp_path / "usb-pasteur.log")},
+        }
+    )
+    display = RecordingDisplay()
+    with make_key(tmp_path, fs_type, files) as key, build_pool(config) as pool:
+        mounter = Mounter(mount_point, config.device.allowed_filesystems)
+        Kiosk(config, display, ListSource([DeviceEvent(Action.ADD, key)]), pool, mounter).run()
+        remaining = key_files(key.node, tmp_path)
+
+    assert "Device cleaned! You can remove the device." in display.messages
+    assert remaining == ["known.txt", "readme.txt"]
+
+    [report_path] = list((tmp_path / "reports").glob("*.json"))
+    report = json.loads(report_path.read_text())
+    jsonschema.validate(report, load_schema())
+    assert [e["name"] for e in report["engines"]] == [
+        "malwarebazaar",
+        "hashlookup",
+        "clamav",
+        "yara",
     ]
+    clamav = next(e for e in report["engines"] if e["name"] == "clamav")
+    assert clamav["version"].startswith("ClamAV ")
+
+    def detections(path: str) -> dict[str, list[str]]:
+        entry = next(f for f in report["files"] if f["path"] == path)
+        return {e["engine"]: e["detections"] for e in entry["engines"] if e["detections"]}
+
+    assert detections("docs/eicar.com") == {"clamav": ["UsbPasteur.Test.EICAR.UNOFFICIAL"]}
+    eicar_entry = next(f for f in report["files"] if f["path"] == "docs/eicar.com")
+    clamav_result = next(e for e in eicar_entry["engines"] if e["engine"] == "clamav")
+    # The descriptor was passed to clamd (no fallback to INSTREAM)
+    assert clamav_result["facts"] == {"mode": "fildes"}
+    assert detections("docs/marker.bin") == {"yara": ["e2e:UsbPasteur_E2E_Marker"]}
+    assert detections("sample.bin") == {"malwarebazaar": ["MalwareBazaar.KnownMalware"]}
+    known = next(f for f in report["files"] if f["path"] == "known.txt")
+    assert known["verdict"] == "clean"
+    assert known["detail"] == "known file (hashlookup)"
+    assert {e["engine"]: e["verdict"] for e in known["engines"]} == {
+        "malwarebazaar": "clean",
+        "hashlookup": "clean",
+        "clamav": "skipped",
+        "yara": "skipped",
+    }
+    assert report["verdict"]["device"] == "malicious"
+    assert report["actions"]["cleaned"] is True
+
+
+@pytest.mark.parametrize("mode", ["fildes", "instream"])
+def test_real_clamd_modes(mode: str, clamd: Path, tmp_path: Path) -> None:
+    engine = ClamavEngine(clamd, mode=mode)
+    engine.load()
+    for content, verdict in ((EICAR, Verdict.MALICIOUS), (b"harmless\n", Verdict.CLEAN)):
+        sample = tmp_path / "sample"
+        sample.write_bytes(content)
+        fd = os.open(sample, os.O_RDONLY)
+        try:
+            info = FileInfo("sample", len(content), "", "", "", fd=fd)
+            result = engine.scan(info)
+        finally:
+            os.close(fd)
+        assert result.verdict is verdict, result
+        assert result.facts["mode"] == mode

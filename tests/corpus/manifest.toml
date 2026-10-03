@@ -1,0 +1,86 @@
+# Detection regression corpus: see tests/corpus/README.md
+#
+# Each [[sample]] is a file put on a simulated device, with the verdict
+# expected from the scan. A sample is either a committed file ("file", relative
+# to this folder) or generated at test time ("generator", for samples that
+# must not be committed, such as the EICAR test file).
+#
+#   name      short description
+#   file      committed file, relative to tests/corpus/
+#   generator name of a generator in tests/test_corpus.py (instead of file)
+#   path      path on the simulated device (default: the file name)
+#   category  harmless, malicious or false_positive
+#   expected  clean, suspicious, malicious, error or skipped
+#   reason    why this verdict is expected (for false positives: which
+#             engine and signature used to fire, and the issue reference)
+#   detected_by  for detections: engines able to detect the sample; the
+#             sample is only checked when one of them is enabled (YARA, for
+#             instance, does not unpack archives)
+
+[[sample]]
+name = "plain text"
+file = "harmless/hello.txt"
+category = "harmless"
+expected = "clean"
+reason = "plain text"
+
+[[sample]]
+name = "empty file"
+file = "harmless/empty"
+category = "harmless"
+expected = "clean"
+reason = "an empty file is scanned like any other file"
+
+[[sample]]
+name = "shell script"
+file = "harmless/script.sh"
+category = "harmless"
+expected = "clean"
+reason = "harmless script"
+
+[[sample]]
+name = "PDF document"
+file = "harmless/document.pdf"
+category = "harmless"
+expected = "clean"
+reason = "minimal PDF with one empty page"
+
+[[sample]]
+name = "PNG image"
+file = "harmless/image.png"
+category = "harmless"
+expected = "clean"
+reason = "1x1 pixel image"
+
+[[sample]]
+name = "zip archive"
+file = "harmless/archive.zip"
+category = "harmless"
+expected = "clean"
+reason = "zip archive of a text file"
+
+[[sample]]
+name = "EICAR test file"
+generator = "eicar"
+path = "eicar.com"
+category = "malicious"
+expected = "malicious"
+reason = "standard antivirus test file"
+detected_by = ["clamav", "yara", "fake"]
+
+[[sample]]
+name = "EICAR in a zip archive"
+generator = "eicar_zip"
+path = "archive/eicar.zip"
+category = "malicious"
+expected = "malicious"
+reason = "EICAR stored (not compressed) in a zip archive"
+detected_by = ["clamav", "fake"]
+
+[[sample]]
+name = "hostile file name"
+generator = "hostile_name"
+path = "esc\u001b[2Jname.txt"
+category = "harmless"
+expected = "clean"
+reason = "control characters in a file name do not prevent the scan"

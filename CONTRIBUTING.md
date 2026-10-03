@@ -50,6 +50,8 @@ pip install -e ".[dev]"
 
 Use the `FAKE_SCAN` mode (`fake_scan = true` in the configuration, or `--fake-scan`) to work on the orchestrator and the interface without real detection engines: only the EICAR test file is reported as malicious. Use `--interface console` to run without curses.
 
+To work with the real engines, install `clamav-daemon` and download the other signatures with the development helper `scripts/fetch-dev-signatures.py`: see [docs/engines.md](docs/engines.md).
+
 ### Coding standards
 
 - Format and lint with `ruff`; check types with `mypy`. Public functions must have type hints.
@@ -69,7 +71,8 @@ pytest
 ```
 
 - Unit tests are required for new code and bug fixes.
-- Detection tests must use harmless samples (EICAR, synthetic files). Do not commit real malware.
+- Detection tests must use harmless samples (EICAR, synthetic files). Do not commit real malware, nor the raw EICAR string: generate it at test time (`tests/samples.py`).
+- Add regression samples and known false positives to the detection corpus: see [tests/corpus/README.md](tests/corpus/README.md).
 - End-to-end tests run in a privileged container with simulated USB disk images (loop devices, vfat/exfat/ext4). Run them with `tests/e2e/run.sh` (requires Docker and the `loop`, `vfat` and `exfat` kernel modules).
 
 ### Commit messages

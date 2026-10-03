@@ -18,3 +18,6 @@ htmlcov/
 
 # Local development configuration
 /usb-pasteur.toml
+
+# Development signatures (scripts/fetch-dev-signatures.py)
+/dev-signatures/

@@ -2,7 +2,7 @@
 
 This is the format of the CIRCL hashlookup filter, also read and written by
 the DCSO "bloom" Go tool and the "flor" Python library. The file is mapped in
-memory instead of being loaded (the CIRCL filter is about 700 MB), so the
+memory instead of being loaded (the CIRCL filter is about 1 GB), so the
 scan workers share it through the page cache.
 
 Layout (little-endian): flags (uint64, version 1 in the low byte), capacity n

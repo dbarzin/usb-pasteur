@@ -46,7 +46,7 @@ from usb_pasteur.engines import (
 from usb_pasteur.engines.registry import load_engines
 from usb_pasteur.filetype import FileTypeDetector
 from usb_pasteur.inventory import Entry
-from usb_pasteur.logs import get_logger, log_event
+from usb_pasteur.logs import LOGGER_NAME, get_logger, log_event
 from usb_pasteur.pipeline import PipelineOptions, scan_entry
 from usb_pasteur.results import FileResult
 from usb_pasteur.text import escape
@@ -95,6 +95,11 @@ def _worker_main(
 ) -> None:
     # Ctrl-C is handled by the kiosk process, which stops the workers
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # Workers do not log: their stderr may be the kiosk screen. Everything
+    # they find is sent to the kiosk process, which logs it.
+    worker_logger = logging.getLogger(LOGGER_NAME)
+    worker_logger.handlers = [logging.NullHandler()]
+    worker_logger.propagate = False
     try:
         engines = load_engines(specs)
         detector = FileTypeDetector()
@@ -202,6 +207,17 @@ class WorkerPool:
         log_event(
             logger, "workers_started", workers=self.size, engines=[e.name for e in self.engines]
         )
+        for engine in self.engines:
+            excluded = engine.extra.get("excluded_rules") or []
+            if excluded:
+                log_event(
+                    logger,
+                    "rules_excluded",
+                    logging.WARNING,
+                    engine=engine.name,
+                    count=len(excluded),
+                    errors=excluded,
+                )
         return self.engines
 
     def stop(self) -> None:
