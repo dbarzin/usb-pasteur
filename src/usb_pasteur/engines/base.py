@@ -112,6 +112,10 @@ class Engine(ABC):
     def signature_info(self) -> list[SignatureInfo]:
         return []
 
+    def extra_info(self) -> dict[str, Any]:
+        """Engine specific information for the scan report (JSON values)."""
+        return {}
+
     @abstractmethod
     def scan(self, file: FileInfo) -> EngineResult: ...
 

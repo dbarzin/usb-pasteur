@@ -9,6 +9,7 @@ from usb_pasteur.engines.base import Engine, EngineKind, EngineSpec
 from usb_pasteur.engines.clamav import ClamavEngine
 from usb_pasteur.engines.fake import FakeEngine
 from usb_pasteur.engines.hashes import HashlookupEngine, MalwareBazaarEngine
+from usb_pasteur.engines.yara import YaraEngine
 
 
 class NoEngineError(Exception):
@@ -51,6 +52,8 @@ def engine_specs(config: Config) -> list[EngineSpec]:
                 ),
             )
         )
+    if engines.yara.enabled:
+        specs.append(EngineSpec(YaraEngine.name, YaraEngine, (engines.yara,)))
     if not any(spec.factory_kind() is EngineKind.CONTENT for spec in specs):
         raise NoEngineError(
             "no content engine is enabled (engines.clamav, engines.yara): "
