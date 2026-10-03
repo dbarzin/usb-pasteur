@@ -125,7 +125,8 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
     config = parse_config(
         {
             "kiosk": {"name": "e2e", "fake_scan": True, "interface": "console"},
-            "device": {"mount_point": str(mount_point)},
+            # A loop device cannot be ejected
+            "device": {"mount_point": str(mount_point), "eject": False},
             "quarantine": {"folder": str(tmp_path / "quarantine")},
             "report": {"folder": str(tmp_path / "reports")},
             "logging": {"file": str(tmp_path / "usb-pasteur.log")},
@@ -242,7 +243,8 @@ def test_real_engines(fs_type: str, clamd: Path, tmp_path: Path) -> None:
     config = parse_config(
         {
             "kiosk": {"name": "e2e", "interface": "console"},
-            "device": {"mount_point": str(mount_point)},
+            # A loop device cannot be ejected
+            "device": {"mount_point": str(mount_point), "eject": False},
             "engines": {
                 "malwarebazaar": {"database": str(signatures / "mb.bin")},
                 "hashlookup": {"bloom": str(signatures / "known.bloom")},

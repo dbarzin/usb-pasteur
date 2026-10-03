@@ -59,6 +59,7 @@ def test_full_config() -> None:
                 "allowed_filesystems": ["vfat"],
                 "use_sudo": True,
                 "auto_mount": True,
+                "eject": False,
                 "auto_mount_wait": 5,
             },
             "scan": {"workers": 8, "suspicious": "warn", "on_error": "warn", "fake_delay": 1},
@@ -106,6 +107,7 @@ def test_full_config() -> None:
     assert config.kiosk.name == "kiosk-01"
     assert config.device.allowed_filesystems == ("vfat",)
     assert config.device.auto_mount is True
+    assert config.device.eject is False
     assert config.device.auto_mount_wait == 5.0
     assert config.scan.fake_delay == 1.0
     assert config.scan.suspicious == "warn"

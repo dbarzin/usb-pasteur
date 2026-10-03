@@ -132,7 +132,7 @@ sudo .venv/bin/usb-pasteur --config usb-pasteur.toml --interface console
 
 Mounting a device requires root: adding your user to a group (such as `disk`) is not enough. On a desktop that mounts USB devices itself (udisks automount), set `auto_mount = true` in `[device]` instead: the kiosk then uses the system mount, and unmounts and mounts the device again with `udisksctl`, so it runs without `sudo`. This is for development only: the system mount is usually read-write and not hardened.
 
-The device is unmounted while the kiosk asks the user to confirm the cleaning, so that it can be removed safely. To clean, it is mounted again read-write; a file is only removed if its SHA-256 is still the one that was scanned (another device may have been inserted in the meantime).
+The device is unmounted while the kiosk asks the user to confirm the cleaning, so that it can be removed safely. To clean, it is mounted again read-write; a file is only removed if its SHA-256 is still the one that was scanned (another device may have been inserted in the meantime). When the scan and the cleaning are over, the device is ejected (`device.eject`, with `eject`, or `udisksctl power-off` in auto-mount mode).
 
 To work on the workflow without signatures, set `fake_scan = true` in `[kiosk]` (or use `--fake-scan`): only the [EICAR test file](https://www.eicar.org/download-anti-malware-testfile/) is reported as malicious, so the whole workflow (scan, quarantine, cleaning) can be tested without real engines.
 

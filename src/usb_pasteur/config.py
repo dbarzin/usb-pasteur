@@ -44,6 +44,8 @@ class DeviceConfig:
     use_sudo: bool = False
     allowed_filesystems: tuple[str, ...] = SUPPORTED_FILESYSTEMS
     command_timeout: float = 60.0
+    # Eject the device when the scan (and the cleaning) is over
+    eject: bool = True
     # Development only: use the mount made by the system (desktop automount)
     # instead of mounting the device read-only; mount_point is then ignored
     auto_mount: bool = False
@@ -215,6 +217,7 @@ def parse_config(data: dict[str, Any]) -> Config:
             "use_sudo",
             "allowed_filesystems",
             "command_timeout",
+            "eject",
             "auto_mount",
             "auto_mount_wait",
         },
@@ -232,6 +235,7 @@ def parse_config(data: dict[str, Any]) -> Config:
         use_sudo=_get(device, "device", "use_sudo", bool, False),
         allowed_filesystems=tuple(filesystems),
         command_timeout=_positive(device, "device", "command_timeout", 60.0),
+        eject=_get(device, "device", "eject", bool, True),
         auto_mount=_get(device, "device", "auto_mount", bool, False),
         auto_mount_wait=_positive(device, "device", "auto_mount_wait", 15.0),
     )

@@ -269,7 +269,7 @@ class Kiosk:
             )
         not_verified = self._check_complete(self.summary)
         if not infected:
-            self._unmount()
+            self._release()
             if not_verified:
                 self.display.message("DEVICE NOT VERIFIED: do not use it. Remove the device.")
             else:
@@ -309,7 +309,7 @@ class Kiosk:
         removed = len(self.actions.removed)
         self.actions.cleaned = removed == len(infected)
         self._save_report()
-        self._unmount()
+        self._release()
         log_event(logger, "device_cleaned", removed=removed, infected=len(infected))
         if removed == len(infected) and not_verified:
             self.display.message(
@@ -322,7 +322,7 @@ class Kiosk:
         return State.WAIT
 
     def on_error(self) -> State:
-        self._unmount()
+        self._release()
         self.display.message("Error: please remove the device.")
         return State.WAIT
 
@@ -407,6 +407,17 @@ class Kiosk:
         log_event(logger, "file_removed", path=name)
         self.display.message(f"{result.rel_path} removed")
         return True
+
+    def _release(self) -> None:
+        """Unmount the device, then eject it (device.eject)."""
+        self._unmount()
+        if self.device is None or not self.config.device.eject:
+            return
+        try:
+            self.mounter.eject(self.device)
+        except DeviceError as ex:
+            # Unmounted and synced: the device can still be removed safely
+            log_event(logger, "eject_failed", logging.WARNING, error=str(ex))
 
     def _unmount(self) -> None:
         try:

@@ -316,8 +316,8 @@ def test_auto_mount(
     assert display.messages[1].startswith("AUTO-MOUNT MODE")
     assert not (usb_tree / "docs" / "eicar.com").exists()
     assert "Device cleaned! You can remove the device." in display.messages
-    # Unmounted before the confirmation, mounted again to clean, then unmounted
-    assert commands == ["unmount", "mount", "unmount"]
+    # Unmounted before the confirmation, mounted again to clean, unmounted, ejected
+    assert commands == ["unmount", "mount", "unmount", "power-off"]
 
 
 def test_unmounted_while_waiting_for_the_user(
@@ -356,3 +356,57 @@ def test_file_changed_before_clean(
     assert (usb_tree / "docs" / "eicar.com").read_text() == "someone else's document"
     assert "Not removed, changed since the scan: docs/eicar.com" in display.messages
     assert "Device NOT cleaned: 1 files remain" in display.messages
+
+
+def test_eject_after_clean(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
+    mounter = DirectoryMounter(usb_tree)
+    ejected_at_confirm: list[list[str]] = []
+    original_confirm = display.confirm
+
+    def confirm(prompt: str) -> None:
+        ejected_at_confirm.append(list(mounter.ejected))
+        original_confirm(prompt)
+
+    display.confirm = confirm  # type: ignore[method-assign]
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
+    # Only unmounted while asking (it must be mounted again), ejected at the end
+    assert ejected_at_confirm == [[]]
+    assert mounter.ejected == ["/dev/sdb1"]
+
+
+def test_eject_clean_device(
+    config: Config, display: RecordingDisplay, tmp_path: Path, pool: WorkerPool
+) -> None:
+    root = tmp_path / "media"
+    root.mkdir()
+    (root / "file.txt").write_text("hello")
+    mounter = DirectoryMounter(root)
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
+    assert mounter.ejected == ["/dev/sdb1"]
+
+
+def test_no_eject(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
+    config = dataclasses.replace(config, device=dataclasses.replace(config.device, eject=False))
+    mounter = DirectoryMounter(usb_tree)
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
+    assert mounter.ejected == []
+
+
+def test_device_removed_is_not_ejected(
+    config: Config, display: RecordingDisplay, usb_tree: Path, pool: WorkerPool
+) -> None:
+    mounter = DirectoryMounter(usb_tree)
+    original_confirm = display.confirm
+
+    def remove_device(prompt: str) -> None:
+        original_confirm(prompt)
+        mounter.present = False
+
+    display.confirm = remove_device  # type: ignore[method-assign]
+    make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
+    assert "Device removed before cleaning: NOT CLEANED" in display.messages
+    assert mounter.ejected == []

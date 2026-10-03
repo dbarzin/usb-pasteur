@@ -22,7 +22,7 @@ mount_point = "/media/usb-pasteur"
 # group is not enough. Run the kiosk as root (systemd service), or set
 # use_sudo = true to run mount/umount through "sudo -n", with a sudoers rule
 # limited to these commands, for instance:
-#   usb-pasteur ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount
+#   usb-pasteur ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /usr/bin/eject
 use_sudo = false
 
 # Filesystems that may be mounted; any other device is rejected
@@ -30,6 +30,11 @@ allowed_filesystems = ["vfat", "exfat", "ntfs", "ext4"]
 
 # Timeout of mount/umount commands, in seconds
 command_timeout = 60
+
+# Eject the device (/usr/bin/eject, Debian package "eject") when the scan and
+# the cleaning are over, so that the user can remove it safely. While the
+# user is asked to confirm the cleaning, the device is only unmounted.
+eject = true
 
 # DEVELOPMENT ONLY, never on a kiosk: when the desktop mounts USB devices
 # itself (udisks automount), use that mount instead of mounting the device.

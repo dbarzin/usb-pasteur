@@ -66,6 +66,7 @@ class DirectoryMounter(Mounter):
         self.mounted = False
         self.read_only: bool | None = None
         self.present = True
+        self.ejected: list[str] = []
 
     def mount(self, device: UsbDevice, read_only: bool = True) -> None:
         self.device = device
@@ -81,6 +82,11 @@ class DirectoryMounter(Mounter):
 
     def device_present(self, device: UsbDevice) -> bool:
         return self.present
+
+    def eject(self, device: UsbDevice) -> None:
+        assert not self.mounted, "ejected while mounted"
+        if self.present:
+            self.ejected.append(device.node)
 
 
 @contextmanager

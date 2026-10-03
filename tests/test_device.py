@@ -138,3 +138,24 @@ def test_system_mount_checks(tmp_path: Path) -> None:
     watcher.mount(UsbDevice("/dev/sdb1", "vfat"))
     with pytest.raises(DeviceError, match="read-only by the system"):
         watcher.mount(UsbDevice("/dev/sdb1", "vfat"), read_only=False)
+
+
+def test_eject(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kwargs: calls.append(argv))
+    node = tmp_path / "sdb1"
+    node.touch()
+    Mounter(tmp_path, ["vfat"], use_sudo=True).eject(UsbDevice(str(node), "vfat"))
+    assert calls == [["/usr/bin/sudo", "-n", "/usr/bin/eject", str(node)]]
+    # A removed device is not ejected
+    Mounter(tmp_path, ["vfat"]).eject(UsbDevice(str(tmp_path / "gone"), "vfat"))
+    assert len(calls) == 1
+
+
+def test_system_eject(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kwargs: calls.append(argv))
+    node = tmp_path / "sdb1"
+    node.touch()
+    SystemMountWatcher(["vfat"], mounts=tmp_path / "mounts").eject(UsbDevice(str(node), "vfat"))
+    assert calls == [["/usr/bin/udisksctl", "power-off", "--no-user-interaction", "-b", str(node)]]

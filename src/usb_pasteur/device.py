@@ -22,6 +22,7 @@ _NO_UNIX_PERMISSIONS = {"vfat", "exfat", "ntfs"}
 # Absolute paths: commands are never looked up in PATH
 MOUNT = "/usr/bin/mount"
 UMOUNT = "/usr/bin/umount"
+EJECT = "/usr/bin/eject"
 SUDO = "/usr/bin/sudo"
 UDISKSCTL = "/usr/bin/udisksctl"
 
@@ -113,6 +114,14 @@ class Mounter:
     def device_present(self, device: UsbDevice) -> bool:
         """Check that the device is still plugged in."""
         return Path(device.node).exists()
+
+    def eject(self, device: UsbDevice) -> None:
+        """Eject an unmounted device, so that it can be removed safely."""
+        if not self.device_present(device):
+            return
+        os.sync()
+        self._run(EJECT, device.node)
+        log_event(logger, "device_ejected", node=device.node)
 
     def _run(self, *command: str) -> None:
         argv = [SUDO, "-n", *command] if self.use_sudo else list(command)
@@ -221,3 +230,12 @@ class SystemMountWatcher(Mounter):
 
     def is_mounted(self) -> bool:
         return self.device is not None and find_mount(self.device.node, self.mounts) is not None
+
+    def eject(self, device: UsbDevice) -> None:
+        """Power off the drive through udisks, so that it can be removed safely."""
+        if not self.device_present(device):
+            return
+        os.sync()
+        self._run(UDISKSCTL, "power-off", "--no-user-interaction", "-b", device.node)
+        self._released = None
+        log_event(logger, "device_ejected", node=device.node)
