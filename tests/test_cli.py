@@ -26,13 +26,25 @@ def test_invalid_config(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
     assert "kiosk.fake_scan" in capsys.readouterr().err
 
 
-def test_refuses_to_start_without_engine(
+def test_refuses_to_start_without_engine_data(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Every engine is enabled by default: without signatures, the kiosk refuses to start
     path = write(tmp_path, "")
     assert main(["--config", str(path), "--check-config"]) == 2
-    assert "fake_scan" in capsys.readouterr().err
+    assert "cannot load an enabled engine: malwarebazaar" in capsys.readouterr().err
     assert main(["--config", str(path), "--check-config", "--fake-scan"]) == 0
+
+
+def test_refuses_to_start_without_content_engine(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write(
+        tmp_path,
+        "[engines.clamav]\nenabled = false\n[engines.yara]\nenabled = false\n",
+    )
+    assert main(["--config", str(path), "--check-config"]) == 2
+    assert "no content engine" in capsys.readouterr().err
 
 
 def test_overrides() -> None:

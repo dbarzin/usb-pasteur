@@ -8,7 +8,7 @@ import pytest
 
 from usb_pasteur.config import Config, parse_config
 from usb_pasteur.device import UsbDevice
-from usb_pasteur.engines import EngineResult, FakeEngine, FileInfo, Verdict
+from usb_pasteur.engines import EngineError, EngineResult, FakeEngine, FileInfo, Verdict
 from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines
 from usb_pasteur.monitor import Action, DeviceEvent
 
@@ -107,8 +107,13 @@ def test_fake_scan_banner(config: Config, display: RecordingDisplay, tmp_path: P
 
 
 def test_no_engine_without_fake_scan() -> None:
-    with pytest.raises(NoEngineError):
+    with pytest.raises(EngineError):
         build_engines(parse_config({"kiosk": {"fake_scan": False}}))
+    engines = {
+        name: {"enabled": False} for name in ("malwarebazaar", "hashlookup", "clamav", "yara")
+    }
+    with pytest.raises(NoEngineError):
+        build_engines(parse_config({"engines": engines}))
 
 
 class SuspiciousEngine(FakeEngine):

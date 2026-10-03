@@ -90,4 +90,5 @@ testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not e2e"]
 markers = [
     "e2e: end-to-end tests with a loop device (need root, see tests/e2e/run.sh)",
+    "integration: tests with real engines or signatures, skipped when unavailable",
 ]

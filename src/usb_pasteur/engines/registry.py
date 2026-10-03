@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from usb_pasteur.config import Config
 from usb_pasteur.engines.base import Engine, EngineKind, EngineSpec
+from usb_pasteur.engines.clamav import ClamavEngine
 from usb_pasteur.engines.fake import FakeEngine
 from usb_pasteur.engines.hashes import HashlookupEngine, MalwareBazaarEngine
 
@@ -33,6 +34,22 @@ def engine_specs(config: Config) -> list[EngineSpec]:
     if engines.hashlookup.enabled:
         specs.append(
             EngineSpec(HashlookupEngine.name, HashlookupEngine, (engines.hashlookup.bloom,))
+        )
+    if engines.clamav.enabled:
+        av = engines.clamav
+        specs.append(
+            EngineSpec(
+                ClamavEngine.name,
+                ClamavEngine,
+                (
+                    av.socket,
+                    av.mode,
+                    av.timeout,
+                    av.max_file_size,
+                    av.suspicious_names,
+                    av.error_names,
+                ),
+            )
         )
     if not any(spec.factory_kind() is EngineKind.CONTENT for spec in specs):
         raise NoEngineError(

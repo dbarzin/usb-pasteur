@@ -10,6 +10,7 @@ from pathlib import Path
 
 from usb_pasteur import __version__
 from usb_pasteur.config import DEFAULT_CONFIG_PATH, INTERFACES, Config, ConfigError, load_config
+from usb_pasteur.engines import EngineError
 from usb_pasteur.kiosk import Kiosk, NoEngineError, build_engines
 from usb_pasteur.lock import AlreadyRunningError, InstanceLock
 from usb_pasteur.logs import setup_logging
@@ -60,6 +61,10 @@ def main(argv: list[str] | None = None) -> int:
         engines = build_engines(config)
     except (ConfigError, NoEngineError) as ex:
         print(f"usb-pasteur: {ex}", file=sys.stderr)
+        return 2
+    except EngineError as ex:
+        print(f"usb-pasteur: cannot load an enabled engine: {ex}", file=sys.stderr)
+        print("usb-pasteur: fix its configuration or disable it", file=sys.stderr)
         return 2
     if args.check_config:
         print(f"{args.config}: OK")
