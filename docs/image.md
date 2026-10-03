@@ -7,8 +7,9 @@ container (`image/Dockerfile`: mkosi, QEMU, OVMF), so the developer only needs
 Docker.
 
 > [!WARNING]
-> The image is a first step: it is neither signed nor protected by dm-verity,
-> and the production image has no signatures yet (the kiosk refuses to start until signature updates exist).
+> The image is not hardened yet (USBGuard, sandboxing, firewall), it is signed
+> with development keys only, and the production image has no signatures yet
+> (the kiosk refuses to start until signature updates exist).
 > See the phase 2 tasks in the [README](../README.md#phase-2--minimal-hardened-image).
 
 ## Layout
@@ -16,7 +17,7 @@ Docker.
 | Path | Role |
 |---|---|
 | `image/mkosi.conf` | Image definition: Debian 13, x86_64, systemd-boot, unified kernel image (UKI), packages |
-| `image/mkosi.repart/` | Partitions: ESP, read-only root filesystem, data partition |
+| `image/mkosi.repart/` | Partitions: ESP, read-only root filesystem and its dm-verity hash and signature, data partition |
 | `image/mkosi.prepare.chroot` | Runtime dependencies in a virtual environment (`/usr/lib/usb-pasteur`), from `image/requirements.txt` (pinned with their hashes) |
 | `image/mkosi.build.chroot` | usb-pasteur wheel, built from the repository without network |
 | `image/mkosi.postinst.chroot` | Installs usb-pasteur, its configuration, systemd service, tmpfiles and logrotate files (`packaging/`), and the clamd settings |
@@ -45,12 +46,14 @@ The cache is not rebuilt when `image/requirements.txt` or
 `image/mkosi.prepare.chroot` change: rebuild it with `image/build.sh -f`
 (`docker volume rm usb-pasteur-mkosi` removes it completely).
 
-The disk image has three partitions:
+The disk image has five partitions:
 
 | Partition | Filesystem | Content |
 |---|---|---|
-| ESP | vfat, 512 MB | systemd-boot and the UKI |
+| ESP | vfat, 512 MB | systemd-boot and the UKI, both signed |
 | root | EROFS, read-only | the whole system but `/var` (about 400 MB) |
+| root-verity | | dm-verity hash tree of the root filesystem |
+| root-verity-sig | | signature of the root hash |
 | data (`usb-pasteur-data`) | ext4, 1 GB in the image | `/var`: scan reports, quarantine, logs, signatures, clamd database |
 
 The root filesystem is read-only by design (EROFS cannot be written at all):
@@ -73,6 +76,41 @@ The image contains:
   shows the curses interface on the first console;
 - no `login` program and no root password: no interactive session is
   possible.
+
+## Signing, Secure Boot and dm-verity
+
+The boot chain is verified from the firmware to every block of the system:
+
+1. with Secure Boot, the firmware only starts systemd-boot if it is signed
+   with a key of its `db`, and systemd-boot only starts a signed UKI;
+2. the UKI holds the kernel, the initrd and the kernel command line, which
+   contains the dm-verity root hash (`roothash=`): changing it breaks the
+   signature;
+3. the root filesystem is opened with dm-verity: every block read is checked
+   against the hash tree, whose root is that hash. A modified block cannot
+   be read (I/O error, "data block ... is corrupted" in the kernel log);
+4. with Secure Boot, the Debian kernel enables its lockdown mode
+   (`integrity`): even root cannot modify the running kernel.
+
+`/var` is not protected by dm-verity: it holds the data of the kiosk, never
+programs or configuration.
+
+The image is signed with `image/mkosi.key` and `image/mkosi.crt` (systemd-boot,
+UKI, root hash). When they do not exist, `image/build.sh` generates a
+**development** key pair, valid 10 years, that never leaves the developer's
+computer (ignored by git). A kiosk must only trust the release keys of the
+project, which are not defined yet: they will be kept out of the repository,
+and mkosi can sign with a key in a hardware token
+(`--secure-boot-key-source=provider:pkcs11`).
+
+On a kiosk, the certificate is enrolled in the firmware in place of the
+Microsoft keys (PK, KEK and db), so that it starts nothing else. The ESP
+contains the keys in the format expected by the firmware
+(`loader/keys/auto/`): with the firmware in Secure Boot setup mode, the
+systemd-boot menu offers to enroll them. The virtual machines enroll the
+certificate with `virt-fw-vars` instead (`image/vm/machine.py`).
+
+## Dependencies
 
 Runtime dependencies are pinned with their hashes in `image/requirements.txt`.
 After a change of the dependencies in `pyproject.toml`, regenerate it with
@@ -99,27 +137,38 @@ image/vm.sh test
 ```
 
 The test boots the test image in QEMU (KVM when `/dev/kvm` is writable,
-otherwise much slower emulation), with UEFI firmware (OVMF) and an empty
-USB 3 controller. It plays the whole user workflow, through QMP and the
-shell on the virtio console:
+otherwise much slower emulation), with UEFI firmware (OVMF) where the image
+signing certificate is enrolled (Secure Boot enabled), and an empty USB 3
+controller. It plays the whole user workflow, through QMP and the shell on
+the virtio console:
 
 1. the kiosk starts with its four engines and no systemd unit fails;
-2. the root filesystem is read-only EROFS, and `/var` was grown to fill the
+2. Secure Boot is enabled, the kernel is locked down and the root filesystem
+   is on dm-verity;
+3. the root filesystem is read-only EROFS, and `/var` was grown to fill the
    8 GB disk of the machine;
-3. an emulated USB key (a vfat disk image holding the corpus) is inserted,
+4. an emulated USB key (a vfat disk image holding the corpus) is inserted,
    which triggers the same udev events as a real device;
-4. each file gets the expected verdict from the expected engine;
-5. the cleaning is confirmed with a key press on the kiosk screen; the
+5. each file gets the expected verdict from the expected engine;
+6. the cleaning is confirmed with a key press on the kiosk screen; the
    infected files are quarantined (checked against their SHA-256) and
    removed from the key, which is ejected;
-6. the key is removed: only the clean files are left on it;
-7. the cleaned key is inserted again and reported clean;
-8. after a reboot, the scan reports are still there and the root filesystem
+7. the key is removed: only the clean files are left on it;
+8. the cleaned key is inserted again and reported clean;
+9. after a reboot, the scan reports are still there and the root filesystem
    is unchanged.
 
+Two more machines boot the same image:
+
+- with a block of the root filesystem modified on the disk (a canary file of
+  the test image): it cannot be read and the kernel reports the corruption;
+- with firmware trusting another key: the firmware refuses systemd-boot
+  ("Access Denied") and nothing starts.
+
 The built image is never modified: the machine writes to a new disk overlay
-(`system.qcow2`) at every start. It takes less than a minute with KVM. `image/vm.sh test --workdir DIR` keeps
-the serial console log, the QEMU log and the key image in `DIR`.
+(`system.qcow2`) at every start. It takes about a minute and a half with KVM.
+`image/vm.sh test --workdir DIR` keeps the serial console logs, the QEMU logs
+and the key image in `DIR`.
 
 ## Interactive virtual machine
 

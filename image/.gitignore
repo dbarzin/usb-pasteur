@@ -1,2 +1,5 @@
 /mkosi.output/
 /vm/work/
+# Signing keys: never in the repository
+/mkosi.key
+/mkosi.crt

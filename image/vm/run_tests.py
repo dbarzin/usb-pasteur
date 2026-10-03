@@ -1,10 +1,13 @@
 """End-to-end test of a USB-Pasteur image in a QEMU/KVM virtual machine.
 
-Boots the test image (image/build.sh --profile test), then plays the whole
-user workflow with an emulated USB key holding the corpus of corpus.py:
-insertion, scan by the real engines, cleaning confirmed with a key press on
-the kiosk screen, quarantine, report, eject and removal; then the cleaned key
-is inserted again and must be reported clean. Run it with image/vm.sh test.
+Boots the test image (image/build.sh --profile test) with Secure Boot and the
+image signing certificate enrolled, checks its integrity protections, then
+plays the whole user workflow with an emulated USB key holding the corpus of
+corpus.py: insertion, scan by the real engines, cleaning confirmed with a key
+press on the kiosk screen, quarantine, report, eject and removal; then the
+cleaned key is inserted again and must be reported clean. Two more boots
+check that a modified root filesystem cannot be read and that firmware
+trusting another key refuses the image. Run it with image/vm.sh test.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import time
@@ -20,9 +24,12 @@ from pathlib import Path
 from typing import Any
 
 import corpus
-from machine import Machine, MachineError, make_key, read_key
+from machine import SIGNING_CERTIFICATE, Machine, MachineError, make_key, read_key
 
 LOG = "/var/log/usb-pasteur/usb-pasteur.log"
+# Discoverable Partitions Specification: root partition of x86-64
+ROOT_TYPE = "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709"
+SECURE_BOOT_VARIABLE = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 REPORTS = "/var/lib/usb-pasteur/reports"
 
 
@@ -96,6 +103,104 @@ def check_boot(vm: Machine, timeout: float) -> None:
     check(not failed, f"failed units:\n{failed}")
     wait_screen(vm, "Ready. Insert a USB device.")
     print(f"kiosk started with engines {', '.join(engines)}")
+
+
+def check_integrity(vm: Machine) -> None:
+    step("check Secure Boot and dm-verity")
+    # The variable holds 4 attribute bytes, then 1 when Secure Boot is enabled
+    secure_boot = vm.shell.run(f"od -An -t u1 {SECURE_BOOT_VARIABLE}").split()
+    check(secure_boot[-1:] == ["1"], f"Secure Boot is not enabled: {secure_boot}")
+    lockdown = vm.shell.run("cat /sys/kernel/security/lockdown").strip()
+    check("[none]" not in lockdown, f"kernel lockdown: {lockdown}")
+    source = vm.shell.run("findmnt -n -o SOURCE /").strip()
+    uuid = vm.shell.run("cat /sys/dev/block/$(mountpoint -d /)/dm/uuid 2>/dev/null || true").strip()
+    check(uuid.startswith("CRYPT-VERITY-"), f"root filesystem is not dm-verity: {source} {uuid}")
+    check(
+        vm.shell.run(f"sha256sum < {corpus.VERITY_CANARY_PATH}").split()[0]
+        == hashlib.sha256(corpus.VERITY_CANARY).hexdigest(),
+        "cannot read the dm-verity canary",
+    )
+    print(f"Secure Boot enabled, kernel lockdown {lockdown}, root on dm-verity ({source})")
+
+
+def root_partition(image: Path) -> tuple[int, int]:
+    """Offset and size in bytes of the root partition of a disk image."""
+    table = json.loads(
+        subprocess.run(
+            ["sfdisk", "--json", str(image)], check=True, capture_output=True, text=True
+        ).stdout
+    )["partitiontable"]
+    sector = table.get("sectorsize", 512)
+    for partition in table["partitions"]:
+        if partition["type"].upper() == ROOT_TYPE:
+            return partition["start"] * sector, partition["size"] * sector
+    raise TestFailure(f"{image}: no root partition")
+
+
+def find_canary(image: Path) -> int:
+    """Offset in the disk image of the first block of the dm-verity canary file."""
+    start, size = root_partition(image)
+    chunk = 16 * 1024 * 1024
+    overlap = len(corpus.VERITY_CANARY_MARKER)
+    with image.open("rb") as disk:
+        position = start
+        while position < start + size:
+            disk.seek(position)
+            data = disk.read(chunk + overlap)
+            index = data.find(corpus.VERITY_CANARY_MARKER)
+            if index >= 0:
+                return position + index
+            position += chunk
+    raise TestFailure(f"{image}: dm-verity canary not found in the root partition")
+
+
+def check_modified_root(image: Path, workdir: Path, timeout: float) -> None:
+    step("modified root filesystem: the modified block cannot be read")
+    offset = find_canary(image)
+
+    def modify(disk: Path) -> None:
+        # Overwrite the canary on the disk of the machine (the image is unchanged)
+        subprocess.run(
+            ["qemu-io", "-f", "qcow2", "-c", f"write -P 0x41 {offset} 16", str(disk)],
+            check=True,
+            capture_output=True,
+        )
+
+    with Machine(image, workdir, SIGNING_CERTIFICATE, modify) as vm:
+        vm.shell.login(timeout)
+        check(
+            not vm.shell.succeeds(f"cat {corpus.VERITY_CANARY_PATH}"),
+            "the modified canary could be read",
+        )
+        errors = vm.shell.run("dmesg | grep -i 'verity' | grep -i 'corrupt' || true").strip()
+        check(bool(errors), "no dm-verity corruption in the kernel log")
+        print(errors.splitlines()[0])
+
+
+def check_foreign_key(image: Path, workdir: Path, timeout: float) -> None:
+    step("firmware trusting another key: the image does not boot")
+    workdir.mkdir(parents=True, exist_ok=True)
+    certificate = workdir / "foreign.crt"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+         "-subj", "/CN=Foreign key", "-keyout", str(workdir / "foreign.key"),
+         "-out", str(certificate)],
+        check=True, capture_output=True,
+    )  # fmt: skip
+    serial = workdir / "serial.log"
+    with Machine(image, workdir, certificate) as vm:
+        deadline = time.monotonic() + timeout
+        while "Access Denied" not in serial.read_text(errors="replace"):
+            check(time.monotonic() < deadline, "the firmware did not report Access Denied")
+            time.sleep(0.5)
+        # Nothing else may start: no shell on the virtio console
+        try:
+            vm.shell.login(10.0)
+        except MachineError:
+            pass
+        else:
+            raise TestFailure("the image booted with firmware trusting another key")
+    print("the firmware refused the bootloader: Access Denied")
 
 
 def check_filesystems(vm: Machine) -> None:
@@ -211,21 +316,32 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.image}: no such image, run image/build.sh --profile test", file=sys.stderr)
         return 2
 
+    if not SIGNING_CERTIFICATE.exists():
+        print(f"{SIGNING_CERTIFICATE}: no signing certificate", file=sys.stderr)
+        return 2
+
+    image = args.image.resolve()
     with tempfile.TemporaryDirectory() as tmp:
         workdir = (args.workdir or Path(tmp)).resolve()
         workdir.mkdir(parents=True, exist_ok=True)
         key = workdir / "usbkey.img"
         make_key(key)
+        current = workdir
         try:
-            with Machine(args.image.resolve(), workdir) as vm:
+            with Machine(image, workdir, SIGNING_CERTIFICATE) as vm:
                 check_boot(vm, args.boot_timeout)
+                check_integrity(vm)
                 check_filesystems(vm)
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
                 check_reboot(vm, args.boot_timeout)
+            current = workdir / "modified-root"
+            check_modified_root(image, current, args.boot_timeout)
+            current = workdir / "foreign-key"
+            check_foreign_key(image, current, 60.0)
         except (TestFailure, MachineError, TimeoutError) as ex:
             print(f"FAILED: {ex}", file=sys.stderr)
-            serial = workdir / "serial.log"
+            serial = current / "serial.log"
             if serial.exists():
                 tail = serial.read_text(errors="replace").splitlines()[-40:]
                 print("--- serial console (last lines)", *tail, sep="\n", file=sys.stderr)

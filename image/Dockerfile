@@ -10,5 +10,5 @@ RUN apt-get update \
         dosfstools e2fsprogs erofs-utils exfatprogs mtools cpio zstd \
         python3 python3-venv python3-pip git ca-certificates \
         qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools \
-        openssl sbsigntool \
+        openssl sbsigntool python3-virt-firmware \
     && rm -rf /var/lib/apt/lists/*

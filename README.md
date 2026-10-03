@@ -173,7 +173,7 @@ Goal: ship a ready-to-flash system image with the smallest possible attack surfa
 
 ### Current status
 
-A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and the data (`/var`) is on its own partition, grown to fill the disk at boot. It is not hardened yet: no dm-verity, no Secure Boot signing, and no signatures in the production image. See [docs/image.md](docs/image.md):
+A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. It is not hardened yet (USBGuard, sandboxing, firewall), and the production image has no signatures. See [docs/image.md](docs/image.md):
 
 ```sh
 image/build.sh --profile test   # build the test image (Docker only)
@@ -205,8 +205,8 @@ Tasks:
 ### System integrity
 
 - [x] Read-only root filesystem, variable data on a separate partition
-- [ ] `dm-verity` on the system partition
-- [ ] Unified Kernel Image (UKI) and Secure Boot
+- [x] `dm-verity` on the system partition
+- [x] Unified Kernel Image (UKI) and Secure Boot (development keys; release keys and their storage still to define)
 - [ ] Atomic A/B partition updates (`systemd-sysupdate`)
 
 ### Hardening
@@ -238,9 +238,10 @@ Tasks:
 - [x] Test image profile: test-only signatures that detect the test corpus, root shell on the virtio console
 - [x] Automated end-to-end test in the virtual machine: insertion through QMP, verdicts of every engine, cleaning confirmed on the kiosk screen, quarantine, report, eject, removal, clean key inserted again
 - [x] Read-only root filesystem, data partition grown to fill the disk, data kept after a reboot
-- [ ] OVMF with the project Secure Boot keys enrolled, software TPM (`swtpm`)
+- [x] OVMF with the image signing keys enrolled: Secure Boot enabled, kernel lockdown, root filesystem on dm-verity; a modified root block cannot be read; firmware trusting another key refuses the image
+- [ ] Software TPM (`swtpm`), once measured boot is used
 - [ ] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4; only vfat for now), plus partitioned, unsupported and corrupted filesystems
-- [ ] Hardening checks: an emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard, no outgoing network outside the update channel, a modified system partition is refused by dm-verity
+- [ ] Hardening checks: an emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard, no outgoing network outside the update channel
 - [ ] A/B update and rollback tested in the virtual machine
 - [ ] Run in continuous integration (KVM when nested virtualization is available, TCG emulation otherwise)
 

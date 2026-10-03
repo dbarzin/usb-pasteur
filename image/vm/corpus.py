@@ -6,6 +6,7 @@ profile). Also a command line tool:
 
     python3 corpus.py key FOLDER         write the key files into FOLDER
     python3 corpus.py signatures FOLDER  write the test signatures into FOLDER
+    python3 corpus.py canary FILE        write the dm-verity canary file
 """
 
 from __future__ import annotations
@@ -28,6 +29,12 @@ rule UsbPasteur_VM_Marker {{
 """
 MALWAREBAZAAR_SAMPLE = b"pretend malware sample listed in MalwareBazaar (VM test)\n"
 KNOWN_FILE = b"a well known file listed in hashlookup (VM test)\n"
+# File of the root filesystem of the test image, modified on the disk by the
+# dm-verity test. Its first line must be unique in the image; it fills whole
+# filesystem blocks, so that the modified block holds nothing else.
+VERITY_CANARY_PATH = "/usr/share/usb-pasteur/verity-canary"
+VERITY_CANARY_MARKER = b"USB-PASTEUR-VERITY-CANARY-" + b"5d1c0a7e93f2b864" * 4 + b"\n"
+VERITY_CANARY = (VERITY_CANARY_MARKER * (3 * 4096 // len(VERITY_CANARY_MARKER) + 1))[: 3 * 4096]
 
 # Files of the USB key and the engine expected to detect each of them
 # ("" when the file must be reported clean and stay on the key)
@@ -66,11 +73,17 @@ def write_signatures(folder: Path) -> None:
     )
 
 
+def write_canary(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(VERITY_CANARY)
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] not in ("key", "signatures"):
+    commands = {"key": write_key, "signatures": write_signatures, "canary": write_canary}
+    if len(argv) != 2 or argv[0] not in commands:
         print(__doc__, file=sys.stderr)
         return 2
-    (write_key if argv[0] == "key" else write_signatures)(Path(argv[1]))
+    commands[argv[0]](Path(argv[1]))
     return 0
 
 

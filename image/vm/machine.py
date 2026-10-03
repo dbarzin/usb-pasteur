@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -34,6 +34,10 @@ import corpus
 OVMF_CODE = Path("/usr/share/OVMF/OVMF_CODE_4M.secboot.fd")
 OVMF_VARS = Path("/usr/share/OVMF/OVMF_VARS_4M.fd")
 KEY_SIZE = 64 * 1024 * 1024
+# Certificate the images are signed with (image/build.sh)
+SIGNING_CERTIFICATE = Path("image/mkosi.crt")
+# Owner GUID of the keys enrolled in the firmware of the machines
+KEY_OWNER = "9a3e6d1c-2f4b-4c8e-8a5d-55b0a7e1c3f2"
 # Disk of the machine, bigger than the image: the data partition grows at boot
 DISK_SIZE = "8G"
 # VNC server address inside the container, which publishes it on localhost only
@@ -129,13 +133,28 @@ def qemu_argv(
     return argv
 
 
-def prepare_workdir(image: Path, workdir: Path) -> None:
+def prepare_workdir(image: Path, workdir: Path, secure_boot: Path | None) -> None:
+    """Create the firmware variables and the disk of a machine.
+
+    secure_boot: certificate enrolled in the firmware (PK, KEK and db, without
+    the Microsoft keys), which then only starts binaries signed with it; None:
+    no keys, the firmware is in Secure Boot setup mode and starts anything.
+    """
     workdir.mkdir(parents=True, exist_ok=True)
     # Sockets of a previous run: never connect to them
     for name in ("qmp.sock", "console.sock"):
         (workdir / name).unlink(missing_ok=True)
-    # Firmware variables of this machine: no keys enrolled (Secure Boot setup mode)
-    shutil.copyfile(OVMF_VARS, workdir / "OVMF_VARS.fd")
+    variables = workdir / "OVMF_VARS.fd"
+    if secure_boot is None:
+        shutil.copyfile(OVMF_VARS, variables)
+    else:
+        cert = str(secure_boot)
+        subprocess.run(
+            ["virt-fw-vars", "--input", str(OVMF_VARS), "--output", str(variables),
+             "--set-pk", KEY_OWNER, cert, "--add-kek", KEY_OWNER, cert,
+             "--add-db", KEY_OWNER, cert, "--secure-boot"],
+            check=True, capture_output=True,
+        )  # fmt: skip
     # Disk of this machine: the built image is never modified, the writes go
     # to a new overlay (a new disk at every start)
     subprocess.run(
@@ -294,9 +313,23 @@ class Console:
 
 
 class Machine:
-    def __init__(self, image: Path, workdir: Path) -> None:
+    """A machine booting an image.
+
+    secure_boot: certificate enrolled in the firmware (see prepare_workdir).
+    prepare_disk: called with the disk of the machine (qcow2) before it starts.
+    """
+
+    def __init__(
+        self,
+        image: Path,
+        workdir: Path,
+        secure_boot: Path | None = None,
+        prepare_disk: Callable[[Path], None] | None = None,
+    ) -> None:
         self.image = image
         self.workdir = workdir
+        self.secure_boot = secure_boot
+        self.prepare_disk = prepare_disk
         self.process: subprocess.Popen[bytes] | None = None
         self.qmp: Qmp | None = None
         self.console: Console | None = None
@@ -316,7 +349,9 @@ class Machine:
         self.stop()
 
     def start(self) -> None:
-        prepare_workdir(self.image, self.workdir)
+        prepare_workdir(self.image, self.workdir, self.secure_boot)
+        if self.prepare_disk is not None:
+            self.prepare_disk(self.workdir / "system.qcow2")
         with (self.workdir / "qemu.log").open("wb") as log:
             self.process = subprocess.Popen(
                 qemu_argv(self.image, self.workdir), stdout=log, stderr=subprocess.STDOUT
@@ -384,7 +419,9 @@ def run_interactive(
     image: Path, workdir: Path, usb_host: Sequence[str] = (), vnc_listen: str = VNC_LISTEN
 ) -> int:
     argv = qemu_argv(image, workdir, True, usb_host, vnc_listen)
-    prepare_workdir(image, workdir)
+    # Secure Boot with the image signing certificate, when there is one
+    secure_boot = SIGNING_CERTIFICATE if SIGNING_CERTIFICATE.exists() else None
+    prepare_workdir(image, workdir, secure_boot)
     key = workdir / "usbkey.img"
     make_key(key)
     print(

@@ -4,6 +4,8 @@
 #   image/build.sh --profile test  test image (test signatures, root shell on hvc0)
 # Other arguments are passed to mkosi. An existing image is replaced. The
 # image is written to image/mkosi.output/.
+# The image is signed with image/mkosi.key and image/mkosi.crt: a development
+# key pair is generated when they do not exist (never use it for a kiosk).
 set -eu
 
 cd "$(dirname "$0")"
@@ -16,9 +18,14 @@ mkdir -p mkosi.output
 exec docker run --rm --privileged \
     -v "$PWD/..:/src" -w /src/image \
     -v usb-pasteur-mkosi:/var/tmp \
-    -e HOST_IDS="$(id -u):$(id -g)" \
+    -e HOST_IDS="$(id -u):$(id -g)" -e KEY_NAME="USB-Pasteur development key ($(id -un)@$(hostname))" \
     usb-pasteur-builder sh -c '
         mkdir -p /var/tmp/cache/images /var/tmp/cache/packages
+        if [ ! -e mkosi.key ] && [ ! -e mkosi.crt ]; then
+            mkosi --genkey-common-name="$KEY_NAME" --genkey-valid-days=3650 genkey
+            chown "$HOST_IDS" mkosi.key mkosi.crt
+            chmod 0600 mkosi.key
+        fi
         status=0
         mkosi --force --cache-directory=/var/tmp/cache/images \
             --package-cache-dir=/var/tmp/cache/packages "$@" build || status=$?
