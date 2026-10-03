@@ -49,7 +49,7 @@ def test_infected_device_is_cleaned(
     assert display.percents[-1] == 100
     assert not mounter.mounted
     manifests = list((tmp_path / "quarantine").glob("*/manifest.json"))
-    assert json.loads(manifests[0].read_text())[0]["original_path"] == "docs/eicar.com"
+    assert json.loads(manifests[0].read_text())["files"][0]["original_path"] == "docs/eicar.com"
 
 
 def test_clean_device(
@@ -158,7 +158,7 @@ def test_suspicious_block(
     assert not (usb_tree / "docs" / "eicar.com").exists()
     assert "2 infected files detected:" in display.messages
     manifest = next((tmp_path / "quarantine").glob("*/manifest.json"))
-    quarantined = {e["original_path"] for e in json.loads(manifest.read_text())}
+    quarantined = {e["original_path"] for e in json.loads(manifest.read_text())["files"]}
     assert quarantined == {"docs/eicar.com", "macro.suspect"}
 
 
@@ -174,7 +174,7 @@ def test_suspicious_warn(
     assert "macro.suspect" in display.messages
     assert "1 infected files detected:" in display.messages
     manifest = next((tmp_path / "quarantine").glob("*/manifest.json"))
-    quarantined = {e["original_path"] for e in json.loads(manifest.read_text())}
+    quarantined = {e["original_path"] for e in json.loads(manifest.read_text())["files"]}
     assert quarantined == {"docs/eicar.com"}
 
 

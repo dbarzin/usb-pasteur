@@ -19,9 +19,12 @@ def test_store(usb_tree: Path, tmp_path: Path, fake_pool: WorkerPool) -> None:
     assert stored.read_bytes() == EICAR
     assert stat.S_IMODE(stored.stat().st_mode) == 0o400
     manifest = json.loads((folder / "manifest.json").read_text())
-    assert manifest[0]["original_path"] == "docs/eicar.com"
-    assert manifest[0]["detections"] == {"fake": "EICAR-Test-File"}
-    assert len(manifest[0]["sha256"]) == 64
+    assert manifest["report"] == {"id": None, "path": None}
+    [entry] = manifest["files"]
+    assert entry["original_path"] == "docs/eicar.com"
+    assert entry["detections"] == {"fake": "EICAR-Test-File"}
+    assert entry["verdict"] == "malicious"
+    assert len(entry["sha256"]) == 64
 
 
 def test_nothing_to_store(tmp_path: Path) -> None:

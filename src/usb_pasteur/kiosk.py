@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 from usb_pasteur.config import Config
@@ -14,6 +15,14 @@ from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.monitor import Action, DeviceSource
 from usb_pasteur.policy import device_verdict
 from usb_pasteur.quarantine import Quarantine
+from usb_pasteur.report import (
+    Actions,
+    DeviceUsage,
+    ScanReport,
+    build_report,
+    set_actions,
+    write_report,
+)
 from usb_pasteur.scanner import FileResult, Scanner, ScanSummary, describe, pipeline_options
 from usb_pasteur.signatures import find_stale
 from usb_pasteur.statemachine import State, StateMachine
@@ -94,6 +103,8 @@ class Kiosk:
         self.summary: ScanSummary | None = None
         # Files to quarantine and remove, depending on the suspicious policy
         self.to_remove: list[FileResult] = []
+        self.report: ScanReport | None = None
+        self.actions = Actions()
         self.machine = StateMachine(
             {
                 State.START: self.on_start,
@@ -184,6 +195,9 @@ class Kiosk:
             return State.ERROR
         size = st.f_frsize * st.f_blocks
         used = max(1, st.f_frsize * (st.f_blocks - st.f_bfree))
+        started = datetime.now(UTC)
+        # Signature versions as they are at the start of the scan
+        engines = self.scanner.pool.engine_info()
         self.display.show_usage(size, used)
         log_event(logger, "scan_started", size=size, used=used)
         self.display.message("Scanning...")
@@ -205,11 +219,30 @@ class Kiosk:
         self.to_remove = s.infected
         if self.config.scan.suspicious == "block":
             self.to_remove = s.infected + s.suspicious
+        self.report = build_report(
+            self.config,
+            self.device,
+            DeviceUsage(size, used),
+            engines,
+            s,
+            started,
+            datetime.now(UTC),
+        )
+        self.actions = Actions()
+        self._save_report()
         if self.quarantine is not None:
             try:
-                self.quarantine.store(self.to_remove, root)
+                self.actions.quarantine_folder = self.quarantine.store(
+                    self.to_remove,
+                    root,
+                    self.report.report_id,
+                    self.report.path,
+                )
+                if self.actions.quarantine_folder is not None:
+                    self.actions.quarantined = list(self.to_remove)
             except OSError as ex:
                 log_event(logger, "quarantine_failed", logging.ERROR, error=str(ex))
+            self._save_report()
         return State.CLEAN
 
     def on_clean(self) -> State:
@@ -246,7 +279,14 @@ class Kiosk:
             self.display.message(f"Cannot clean device: {ex}")
             return State.ERROR
 
-        removed = sum(self._remove(result.path) for result in infected)
+        for result in infected:
+            if self._remove(result.path):
+                self.actions.removed.append(result)
+            else:
+                self.actions.remove_failed.append(result)
+        removed = len(self.actions.removed)
+        self.actions.cleaned = removed == len(infected)
+        self._save_report()
         self._unmount()
         log_event(logger, "device_cleaned", removed=removed, infected=len(infected))
         if removed == len(infected) and not_verified:
@@ -265,6 +305,19 @@ class Kiosk:
         return State.WAIT
 
     # -- helpers -----------------------------------------------------------
+
+    def _save_report(self) -> None:
+        """Write the scan report; a failure is logged and shown, not fatal."""
+        if self.report is None:
+            return
+        set_actions(self.report, self.actions)
+        try:
+            path = write_report(self.report, self.config.report.folder)
+        except OSError as ex:
+            log_event(logger, "report_failed", logging.ERROR, error=str(ex))
+            self.display.message(f"WARNING: cannot write the scan report: {ex.strerror}")
+            return
+        log_event(logger, "report_written", report_id=self.report.report_id, path=str(path))
 
     def _check_complete(self, summary: ScanSummary) -> bool:
         """Report files that were not fully scanned.

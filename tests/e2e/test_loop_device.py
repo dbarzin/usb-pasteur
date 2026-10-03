@@ -94,6 +94,7 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
             "kiosk": {"name": "e2e", "fake_scan": True, "interface": "console"},
             "device": {"mount_point": str(mount_point)},
             "quarantine": {"folder": str(tmp_path / "quarantine")},
+            "report": {"folder": str(tmp_path / "reports")},
             "logging": {"file": str(tmp_path / "usb-pasteur.log")},
         }
     )
@@ -121,7 +122,7 @@ def test_scan_and_clean(usb_key: UsbDevice, tmp_path: Path) -> None:
     # Infected files are quarantined
     manifests = list((tmp_path / "quarantine").glob("*/manifest.json"))
     assert len(manifests) == 1
-    quarantined = {e["original_path"] for e in json.loads(manifests[0].read_text())}
+    quarantined = {e["original_path"] for e in json.loads(manifests[0].read_text())["files"]}
     assert quarantined == {"docs/eicar.com", "eicar copy.txt"}
 
     # Infected files are removed from the key, clean files are kept

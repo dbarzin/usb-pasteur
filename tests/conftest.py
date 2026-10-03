@@ -126,6 +126,7 @@ def config(tmp_path: Path) -> Config:
             "device": {"mount_point": str(tmp_path / "media")},
             "scan": {"workers": 2},
             "quarantine": {"folder": str(tmp_path / "quarantine")},
+            "report": {"folder": str(tmp_path / "reports")},
             "logging": {"file": ""},
         }
     )
