@@ -1,0 +1,31 @@
+#!/bin/sh
+# Test profile: test-only signatures and the matching configuration.
+set -eu
+
+SIGNATURES=/usr/share/usb-pasteur/test-signatures
+/usr/lib/usb-pasteur/bin/python3 "$SRCDIR/usb-pasteur/image/vm/corpus.py" signatures "$SIGNATURES"
+
+# clamd only loads the test database; the Debian units require the official one
+mv "$SIGNATURES/usb-pasteur-test.hdb" /var/lib/clamav/
+for unit in clamav-daemon.service clamav-daemon.socket; do
+    mkdir -p "/etc/systemd/system/$unit.d"
+    printf '[Unit]\nConditionPathExistsGlob=\n' > "/etc/systemd/system/$unit.d/test-signatures.conf"
+done
+
+cat > /etc/usb-pasteur/usb-pasteur.toml <<CONFIG
+# Test profile configuration: test-only signatures (image/vm/corpus.py)
+[kiosk]
+name = "vm-test"
+
+[engines.malwarebazaar]
+database = "$SIGNATURES/malwarebazaar.sha256.bin"
+
+[engines.hashlookup]
+bloom = "$SIGNATURES/hashlookup.bloom"
+
+[engines.yara]
+rules = [{ name = "vm-test", path = "$SIGNATURES/rules.yar" }]
+
+[logging]
+level = "DEBUG"
+CONFIG

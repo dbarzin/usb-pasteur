@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runtime dependencies in a virtual environment, from the hash-pinned list.
+# Prepare scripts run with network access; the result is cached by mkosi.
+set -eu
+
+if [ "$1" = final ]; then
+    python3 -m venv /usr/lib/usb-pasteur
+    /usr/lib/usb-pasteur/bin/pip install --no-cache-dir --require-hashes --only-binary :all: \
+        -r "$SRCDIR/usb-pasteur/image/requirements.txt"
+fi

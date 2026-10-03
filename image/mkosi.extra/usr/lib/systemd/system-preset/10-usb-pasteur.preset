@@ -1,0 +1,23 @@
+# Units of the kiosk image. Read before the distribution presets
+# (90-systemd.preset), which "systemctl preset-all" applies at build time.
+
+enable usb-pasteur.service
+enable clamav-daemon.socket
+enable clamav-daemon.service
+enable logrotate.timer
+
+# No network: signature updates come through a dedicated channel (phase 2)
+disable clamav-freshclam.service
+disable clamav-freshclam-once.*
+disable systemd-networkd.*
+disable systemd-networkd-wait-online.service
+disable systemd-network-generator.service
+disable systemd-resolved.service
+disable systemd-timesyncd.service
+disable remote-fs.target
+
+# Not used on the kiosk
+disable clamav-clamonacc.service
+disable systemd-homed.service
+disable systemd-homed-activate.service
+disable dpkg-db-backup.timer

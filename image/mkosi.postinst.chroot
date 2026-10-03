@@ -1,0 +1,30 @@
+#!/bin/sh
+# Install usb-pasteur and its deployment files into the image.
+set -eu
+
+PACKAGING="$SRCDIR/usb-pasteur/packaging"
+
+/usr/lib/usb-pasteur/bin/pip install --no-cache-dir --no-deps --no-index \
+    /usr/share/usb-pasteur/wheels/usb_pasteur-*.whl
+rm -r /usr/share/usb-pasteur/wheels
+ln -sf /usr/lib/usb-pasteur/bin/usb-pasteur /usr/bin/usb-pasteur
+
+install -D -m 0644 "$PACKAGING/usb-pasteur.toml" /etc/usb-pasteur/usb-pasteur.toml
+install -D -m 0644 "$PACKAGING/systemd/usb-pasteur.service" \
+    /usr/lib/systemd/system/usb-pasteur.service
+install -D -m 0644 "$PACKAGING/tmpfiles/usb-pasteur.conf" /usr/lib/tmpfiles.d/usb-pasteur.conf
+install -D -m 0644 "$PACKAGING/logrotate/usb-pasteur" /etc/logrotate.d/usb-pasteur
+
+# clamd settings required by the ClamAV engine (docs/engines.md)
+clamd_option() {
+    if grep -q "^$1 " /etc/clamav/clamd.conf; then
+        sed -i "s|^$1 .*|$1 $2|" /etc/clamav/clamd.conf
+    else
+        echo "$1 $2" >> /etc/clamav/clamd.conf
+    fi
+}
+clamd_option LocalSocket /run/clamav/clamd.ctl
+clamd_option AlertExceedsMax true
+clamd_option MaxFileSize 100M
+clamd_option MaxScanSize 400M
+clamd_option StreamMaxLength 100M

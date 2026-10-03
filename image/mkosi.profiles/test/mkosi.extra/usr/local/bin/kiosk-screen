@@ -1,0 +1,9 @@
+#!/usr/lib/usb-pasteur/bin/python3
+"""Print the text of the kiosk screen (first console, tty1)."""
+
+with open("/dev/vcsa1", "rb") as screen:
+    rows, cols, _, _ = screen.read(4)
+    cells = screen.read()
+text = cells[::2].decode("cp437")
+for row in range(rows):
+    print(text[row * cols : (row + 1) * cols].rstrip())

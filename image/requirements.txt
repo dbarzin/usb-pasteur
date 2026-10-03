@@ -1,0 +1,23 @@
+# Runtime dependencies installed in the image, pinned with their hashes.
+# Regenerate after a change of the dependencies in pyproject.toml:
+#   image/lock-requirements.sh
+python-magic==0.4.27 \
+    --hash=sha256:c1ba14b08e4a5f5c31a302b7721239695b2f0f058d125bd5ce1ee36b9d9d3c3b \
+    --hash=sha256:c212960ad306f700aa0d01e5d7a325d20548ff97eb9920dcd29513174f0294d3
+    # via usb-pasteur (pyproject.toml)
+pyudev==0.24.5 \
+    --hash=sha256:4e7faaec419b81a902d057568101819f448972c0cf448bb9c22203e4fc6a8eb9 \
+    --hash=sha256:a9c62d04a83472fb05ad5e014ef85933e5cf2fef193caf8b77bb7a9e8ded4812
+    # via usb-pasteur (pyproject.toml)
+yara-x==1.21.0 \
+    --hash=sha256:04be37c92bbbcba4065a4cf0f0029c0b0bf3e7c68f3c35b4cf523300e534cf58 \
+    --hash=sha256:1c6e15cf61500bc27960099872586d41f3cfdd8597e4bb8d2f0361b921b118d9 \
+    --hash=sha256:24a739f492782335bb3b886cb2b6eaf008991f67b9e63e15b940af02aba233c0 \
+    --hash=sha256:33bc3665170e640752fed275a7ad6551079696f00d698c9433607dfc6bdd7493 \
+    --hash=sha256:54222707bc9e0ee9fca7b6553e330b7885ba43d068d1ae560809724951f7c728 \
+    --hash=sha256:9bd9961b44b47dd747d526e61c703a2a8170426d003e789e7724bc7862de6d56 \
+    --hash=sha256:b863e93b7a01cbb7c192ce9582d2da562706d603ec7a58416a84940cde7540ac \
+    --hash=sha256:c5a8bcce08ece1e57d116cac63e671fe88d28f0dff58ee1d1055ca611d0eb0a8 \
+    --hash=sha256:cc1ed7760521aa80ba5a4ae4703441e7146d88ad09733d751a3b6e277bf0ef69 \
+    --hash=sha256:db8565ba7ec71746349ec92d2662a70d90cbc580a6623d633ae2468af432144c
+    # via usb-pasteur (pyproject.toml)
