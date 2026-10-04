@@ -278,10 +278,12 @@ def test_stale_signatures(config: Config) -> None:
         EngineInfo("hashlookup", EngineKind.HASH, "", 10.0, (SignatureInfo("bloom"),)),
         EngineInfo("fake", EngineKind.CONTENT, "", 1.0, (old,)),
     ]
-    warnings = stale_signatures(config, engines)
-    assert len(warnings) == 2
+    warnings, undated = stale_signatures(config, engines)
+    assert len(warnings) == 1
     assert warnings[0].startswith("clamav: signatures daily are old (")
-    assert warnings[1] == "hashlookup: signatures bloom are old (unknown age)"
+    assert warnings[0].endswith(" days)")
+    # Without a date: logged, not shown
+    assert undated == ["hashlookup: bloom"]
 
 
 def test_auto_mount(

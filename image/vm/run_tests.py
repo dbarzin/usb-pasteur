@@ -122,7 +122,11 @@ def check_boot(vm: Machine, timeout: float) -> None:
     )
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
     check(not failed, f"failed units:\n{failed}")
-    wait_screen(vm, "Ready. Insert a USB device.")
+    screen = wait_screen(vm, "Ready. Insert a USB device.")
+    # The test set is new; its ClamAV database has no date (custom
+    # signatures only): logged, not shown
+    check("WARNING" not in screen, f"warning on the kiosk screen:\n{screen}")
+    check(count_events(vm, "signatures_undated") == 1, "undated ClamAV database not logged")
     print(f"kiosk started with engines {', '.join(engines)}, signature set 1 verified")
 
 

@@ -156,7 +156,8 @@ default_score = 60
 
 [signatures]
 # Warn at startup when a signature database is older than this (in days);
-# each engine can override it with its own max_age_days
+# each engine can override it with its own max_age_days. A database without
+# a date (ClamAV custom signatures only) is logged, not shown.
 max_age_days = 7.0
 
 # Signed signature sets (docs/signatures.md). The engines read the files of

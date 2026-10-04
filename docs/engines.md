@@ -274,7 +274,10 @@ older than `signatures.max_age_days` (7 days), or the `max_age_days` of its
 engine (45 days for Hashlookup, published monthly). The date comes from the
 `manifest.json` of the signature folder when present
 (`{"<file>": {"version", "date", "source", "sha256"}}`), otherwise from the
-file modification time; ClamAV reports its own database date.
+file modification time; ClamAV reports its own database date. A database
+without a date is only logged (`signatures_undated`), not shown: a ClamAV
+database of custom signatures only has none (the date comes from the header
+of the official `daily` database).
 
 ## Scan report
 

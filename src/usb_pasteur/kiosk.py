@@ -185,8 +185,13 @@ def make_mounter(config: Config) -> Mounter:
     )
 
 
-def stale_signatures(config: Config, engines: list[EngineInfo]) -> list[str]:
-    """Warnings for signature databases older than their maximum age."""
+def stale_signatures(config: Config, engines: list[EngineInfo]) -> tuple[list[str], list[str]]:
+    """Signature databases older than their maximum age, and those without a date.
+
+    Return the warnings shown on the screen (a known date, too old) and the
+    databases whose age is unknown (only logged: for instance a ClamAV
+    database of custom signatures only, without the official CVD header).
+    """
     engine_configs = {
         "malwarebazaar": config.engines.malwarebazaar.max_age_days,
         "hashlookup": config.engines.hashlookup.max_age_days,
@@ -194,14 +199,20 @@ def stale_signatures(config: Config, engines: list[EngineInfo]) -> list[str]:
         "yara": config.engines.yara.max_age_days,
     }
     warnings = []
+    undated = []
     for engine in engines:
         if engine.name not in engine_configs:
             continue
         max_age = engine_configs[engine.name] or config.signatures.max_age_days
         for stale in find_stale(engine.name, engine.signatures, max_age):
-            age = "unknown age" if stale.age_days == float("inf") else f"{stale.age_days:.0f} days"
-            warnings.append(f"{engine.name}: signatures {stale.signature.name} are old ({age})")
-    return warnings
+            if stale.age_days == float("inf"):
+                undated.append(f"{engine.name}: {stale.signature.name}")
+            else:
+                warnings.append(
+                    f"{engine.name}: signatures {stale.signature.name} are old "
+                    f"({stale.age_days:.0f} days)"
+                )
+    return warnings, undated
 
 
 class Kiosk:
@@ -291,9 +302,12 @@ class Kiosk:
             self.display.message(f"NO VALID SIGNATURES: {self.signatures_error}")
             self.display.message("This kiosk cannot scan: insert a signature update device.")
             return
-        for warning in stale_signatures(self.config, self.scanner.engines):
+        warnings, undated = stale_signatures(self.config, self.scanner.engines)
+        for warning in warnings:
             log_event(logger, "signatures_stale", logging.WARNING, warning=warning)
             self.display.message(f"WARNING: {warning}")
+        if undated:
+            log_event(logger, "signatures_undated", signatures=undated)
         self.display.message("Ready. Insert a USB device.")
 
     def on_wait(self) -> State:
