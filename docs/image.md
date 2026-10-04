@@ -119,9 +119,21 @@ do not exist; the test profile signs its signature set with it. See
 On a kiosk, the certificate is enrolled in the firmware in place of the
 Microsoft keys (PK, KEK and db), so that it starts nothing else. The ESP
 contains the keys in the format expected by the firmware
-(`loader/keys/auto/`): with the firmware in Secure Boot setup mode, the
-systemd-boot menu offers to enroll them. The virtual machines enroll the
-certificate with `virt-fw-vars` instead (`image/vm/machine.py`).
+(`loader/keys/auto/`): with the firmware in Secure Boot setup mode (keys
+cleared in the firmware setup), systemd-boot enrolls them at the first boot
+(`secure-boot-enroll force`). Enrolling only the project certificate also
+refuses the option ROMs signed by Microsoft: a computer whose display or
+disk controller needs one (a graphics card, for instance) would not start
+it. The virtual machines enroll the certificate with `virt-fw-vars` instead
+(`image/vm/machine.py`).
+
+systemd-boot has no menu (`/efi/loader/loader.conf`, `timeout
+menu-disabled`): it starts the default entry, the newest version not marked
+bad, and does not read the keyboard. A keyboard plugged into the kiosk
+cannot select another version, edit the kernel command line (refused with
+Secure Boot anyway), power off the machine or reboot into the firmware
+setup. The ESP is not part of the image updates: this file stays as
+installed.
 
 ## USB devices
 
@@ -364,7 +376,9 @@ the virtio console:
     the image; the kernel settings, the firewall and the service sandboxes are
     in place;
 11. after a reboot, the scan reports are still there, the root filesystem is
-    unchanged and the signature set 5 is verified at start;
+    unchanged and the signature set 5 is verified at start; a key pressed
+    while the firmware and the boot loader start does not open the boot
+    loader menu;
 12. an image update key to version 2 is inserted: the kiosk installs it in
     the free slot and restarts, version 2 boots from slot B and is kept (its
     UKI loses its boot counter), with the same data; version 3, published on
@@ -384,7 +398,8 @@ Two more machines boot the same image:
 The built image is never modified: the machine writes to a new disk overlay
 (`system.qcow2`) at every start. It takes about 7 minutes with KVM.
 `image/vm.sh test --workdir DIR` keeps the serial console logs, the QEMU logs
-and the key images in `DIR`.
+and the key images in `DIR`, and the kiosk log (`kiosk.log`) when the test
+fails.
 
 ## Interactive virtual machine
 

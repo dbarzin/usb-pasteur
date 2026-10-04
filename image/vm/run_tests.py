@@ -13,6 +13,7 @@ trusting another key refuses the image. Run it with image/vm.sh test.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import hashlib
 import json
@@ -22,7 +23,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,8 @@ LOG = "/var/log/usb-pasteur/usb-pasteur.log"
 ROOT_TYPE = "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709"
 SECURE_BOOT_VARIABLE = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 REPORTS = "/var/lib/usb-pasteur/reports"
+# Keys pressed after a reset: the firmware and the boot loader start in it
+BOOT_KEYS_DURATION = 15.0
 
 
 class TestFailure(Exception):
@@ -404,10 +407,25 @@ def count_reports(vm: Machine) -> int:
 
 
 def check_reboot(vm: Machine, timeout: float) -> None:
-    step("reboot: the data is kept, the system is unchanged")
+    step("reboot: the data is kept, the system is unchanged, no boot menu")
     reports = count_reports(vm)
     before = count_events(vm, "kiosk_started")
-    vm.reboot(timeout)
+    serial = vm.workdir / "serial.log"
+    offset = serial.stat().st_size
+    vm.shell.send("systemctl reboot")
+    vm.monitor.wait_event("RESET", timeout=timeout)
+    # A key held while the firmware and the boot loader start: the boot
+    # loader menu must not open (it would wait there)
+    deadline = time.monotonic() + BOOT_KEYS_DURATION
+    while time.monotonic() < deadline:
+        vm.press_key("spc")
+        time.sleep(0.2)
+    vm.shell.reset()
+    vm.shell.login(timeout)
+    with serial.open("rb") as log:
+        log.seek(offset)
+        console = log.read()
+    check(b"Debian GNU/Linux 13 (trixie) (" not in console, "the boot loader menu opened")
     started = wait_next_event(vm, "kiosk_started", before, timeout=timeout)
     check(started["ready"], "the kiosk cannot scan after a reboot")
     check(started["signature_set"] == 5, f"signature set after a reboot: {started}")
@@ -415,7 +433,10 @@ def check_reboot(vm: Machine, timeout: float) -> None:
     check(not vm.shell.succeeds("test -e /usr/test"), "the root filesystem changed")
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
     check(not failed, f"failed units:\n{failed}")
+    loader = vm.shell.run("cat $(bootctl --print-esp-path)/loader/loader.conf")
+    check("timeout menu-disabled" in loader, f"boot loader configuration:\n{loader}")
     print(f"{reports} scan reports kept, signature set 5 verified at start")
+    print("keys pressed at boot: the boot loader menu stays closed")
 
 
 def count_events(vm: Machine, name: str) -> int:
@@ -721,33 +742,60 @@ def check_infected_key(vm: Machine, key: Path) -> None:
     print(f"files left on the key: {', '.join(remaining)}")
 
 
+class KioskLog:
+    """Follow the kiosk log in order, from the line where it is created.
+
+    Each event waited for must come after the previous one: an event of an
+    earlier insertion is never taken for the expected one.
+    """
+
+    def __init__(self, vm: Machine) -> None:
+        self.vm = vm
+        self.line = int(vm.shell.run(f"cat {LOG} 2>/dev/null | wc -l"))
+
+    def wait(
+        self, name: str, timeout: float = 120.0, action: Callable[[], None] | None = None
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout
+        while True:
+            output = self.vm.shell.run(f"tail -n +{self.line + 1} {LOG}")
+            for index, line in enumerate(output.splitlines()):
+                if line.startswith("{") and json.loads(line).get("event") == name:
+                    self.line += index + 1
+                    event: dict[str, Any] = json.loads(line)
+                    return event
+            if time.monotonic() > deadline:
+                raise TestFailure(f"kiosk event {name} not logged after line {self.line}")
+            if action is not None:
+                action()
+            time.sleep(1.0)
+
+
 def scan_and_clean(vm: Machine, name: str, image: Path) -> None:
     """Insert a key holding the corpus: clean it, then it is reported clean."""
-    names = ("device_inserted", "infected_files", "device_cleaned", "device_ejected",
-             "device_verdict", "device_removed")  # fmt: skip
-    before = {event: count_events(vm, event) for event in names}
+    log = KioskLog(vm)
     vm.insert_key(image)
-    inserted = wait_next_event(vm, "device_inserted", before["device_inserted"])
-    infected = wait_next_event(vm, "infected_files", before["infected_files"])
+    inserted = log.wait("device_inserted")
+    infected = log.wait("infected_files")
     expected = sorted(path for path, (_, engine) in corpus.KEY.items() if engine)
     check(infected["count"] == len(expected), f"{name}: infected files: {infected['count']}")
-    cleaned = wait_next_event(
-        vm, "device_cleaned", before["device_cleaned"], action=vm.press_key, timeout=60
-    )
+    # The kiosk ejects the key, then logs the cleaning
+    log.wait("device_ejected", action=vm.press_key, timeout=60)
+    cleaned = log.wait("device_cleaned")
     check(cleaned["removed"] == len(expected), f"{name}: removed files: {cleaned['removed']}")
-    wait_next_event(vm, "device_ejected", before["device_ejected"])
     vm.remove_key()
-    wait_next_event(vm, "device_removed", before["device_removed"])
+    log.wait("device_removed")
 
     vm.insert_key(image)
-    verdict = wait_next_event(vm, "device_verdict", before["device_verdict"] + 1)
+    log.wait("device_inserted")
+    verdict = log.wait("device_verdict")
     check(verdict["verdict"] == "clean", f"{name}: verdict after cleaning: {verdict}")
     files = sorted(f["path"] for f in last_report(vm)["files"])
     clean = sorted(path for path, (_, engine) in corpus.KEY.items() if not engine)
     check(files == clean, f"{name}: files after cleaning: {files}")
-    wait_next_event(vm, "device_ejected", before["device_ejected"] + 1)
+    log.wait("device_ejected")
     vm.remove_key()
-    wait_next_event(vm, "device_removed", before["device_removed"] + 1)
+    log.wait("device_removed")
     print(
         f"{name}: {inserted['fs_type']} on {inserted['node']}, "
         f"{len(expected)} infected files removed, then reported clean"
@@ -780,21 +828,21 @@ def check_refused_keys(vm: Machine, workdir: Path) -> None:
     ):
         image = workdir / f"{name}.img"
         build(image)
-        before = {event: count_events(vm, event) for event in ("mount_failed", "device_removed")}
+        log = KioskLog(vm)
         vm.insert_key(image)
-        failed = wait_next_event(vm, "mount_failed", before["mount_failed"])
+        failed = log.wait("mount_failed")
         check(error in failed["error"], f"{name}: {failed}")
         wait_screen(vm, "Error: please remove the device.")
         vm.remove_key()
-        wait_next_event(vm, "device_removed", before["device_removed"])
+        log.wait("device_removed")
         print(f"{name}: refused, {failed['error'].splitlines()[0]}")
 
     # Mounted, but a file cannot be read: the key is not verified
     image = workdir / "corrupted-vfat.img"
     keys.corrupted_vfat_key(image)
-    before = {event: count_events(vm, event) for event in ("device_verdict", "device_removed")}
+    log = KioskLog(vm)
     vm.insert_key(image)
-    verdict = wait_next_event(vm, "device_verdict", before["device_verdict"])
+    verdict = log.wait("device_verdict")
     check(
         verdict["verdict"] == "not_verified" and not verdict["complete"],
         f"corrupted-vfat: verdict {verdict}",
@@ -803,7 +851,7 @@ def check_refused_keys(vm: Machine, workdir: Path) -> None:
     report = last_report(vm)
     check(keys.UNREADABLE in json.dumps(report), f"corrupted-vfat: {keys.UNREADABLE} not reported")
     vm.remove_key()
-    wait_next_event(vm, "device_removed", before["device_removed"])
+    log.wait("device_removed")
     print(f"corrupted-vfat: not verified, {keys.UNREADABLE} unreadable")
 
 
@@ -817,6 +865,17 @@ def check_clean_key(vm: Machine, key: Path) -> None:
     wait_event(vm, "device_removed", occurrence=2)
     check(read_key(key) == sorted(p for p, (_, e) in corpus.KEY.items() if not e), "key changed")
     print("the cleaned key is reported clean")
+
+
+@contextlib.contextmanager
+def saved_log(vm: Machine, workdir: Path) -> Iterator[None]:
+    """On a failure, copy the kiosk log of the machine into the work folder."""
+    try:
+        yield
+    except (TestFailure, MachineError, TimeoutError):
+        with contextlib.suppress(MachineError, TimeoutError, OSError):
+            (workdir / "kiosk.log").write_text(vm.shell.run(f"cat {LOG}", timeout=30))
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -845,7 +904,7 @@ def main(argv: list[str] | None = None) -> int:
         make_key(key)
         current = workdir
         try:
-            with Machine(image, workdir, SIGNING_CERTIFICATE) as vm:
+            with Machine(image, workdir, SIGNING_CERTIFICATE) as vm, saved_log(vm, workdir):
                 check_boot(vm, args.boot_timeout)
                 check_sandbox(vm)
                 check_integrity(vm)
