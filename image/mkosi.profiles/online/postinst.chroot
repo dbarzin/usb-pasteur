@@ -1,0 +1,34 @@
+#!/bin/sh
+# Profile "online": the kiosk downloads the signatures from their sources,
+# with the credentials of image/credentials.toml (outside git).
+set -eu
+
+# [updates] of the kiosk configuration: enabled, from every source
+sed -i '/^\[updates\]/,/^\[/ {
+    s/^enabled = false$/enabled = true/
+    s/^sources = \[\]$/sources = ["clamav", "yara-forge", "malwarebazaar", "hashlookup"]/
+}' /etc/usb-pasteur/usb-pasteur.toml
+
+# Credentials: systemd credentials of the update service (ImportCredential=),
+# root only, on the read-only root filesystem. Without the abuse.ch Auth-Key,
+# MalwareBazaar is not downloaded (its database is kept from the last
+# signature update device).
+CREDENTIALS="$SRCDIR/usb-pasteur/image/credentials.toml"
+install -d -m 0700 /etc/credstore
+if [ -f "$CREDENTIALS" ]; then
+    /usr/lib/usb-pasteur/bin/python3 - "$CREDENTIALS" <<'PYTHON'
+import os
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as f:
+    credentials = tomllib.load(f)
+key = credentials.get("abusech", {}).get("auth_key", "")
+if key:
+    path = "/etc/credstore/usb-pasteur.abusech-auth-key"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(key.strip() + "\n")
+    print("abuse.ch Auth-Key installed as a credential of the update service")
+PYTHON
+fi

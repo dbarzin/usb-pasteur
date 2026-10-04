@@ -29,10 +29,20 @@ rules = [{ name = "vm-test", path = "/var/lib/usb-pasteur-signatures/current/yar
 [logging]
 level = "DEBUG"
 
-# Published by the virtual machine test (image/vm/run_tests.py) on the host
-# of the QEMU user network
+# Sources published by the virtual machine test (image/vm/run_tests.py) on
+# the host of the QEMU user network; ClamAV is kept from the installed set
 [updates]
 enabled = true
-url = "http://10.0.2.2:8080/usb-pasteur-signatures/"
+sources = ["yara-forge", "malwarebazaar", "hashlookup"]
 image_url = "http://10.0.2.2:8080/usb-pasteur-image/"
+
+[updates.mirrors]
+yara-forge = "http://10.0.2.2:8080/sources/yara-forge-rules-core.zip"
+malwarebazaar = "http://10.0.2.2:8080/sources/malwarebazaar-full-sha256.zip"
+hashlookup = "http://10.0.2.2:8080/sources/hashlookup-full.bloom"
 CONFIG
+
+# The abuse.ch Auth-Key the test server expects
+install -d -m 0700 /etc/credstore
+printf 'vm-test-auth-key\n' >/etc/credstore/usb-pasteur.abusech-auth-key
+chmod 0600 /etc/credstore/usb-pasteur.abusech-auth-key

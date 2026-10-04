@@ -302,13 +302,20 @@ After a change of the dependencies in `pyproject.toml`, regenerate it with
 
 ## Profile online
 
-`--profile online` adds online signature updates (see
+`--profile online` adds online signature updates from their sources (see
 [signatures.md](signatures.md#online-updates)): systemd-networkd (DHCP on the
-wired network), systemd-resolved, the `usb-pasteur-update` timer and a
-firewall that only lets the update service out
-(`image/mkosi.profiles/online/`). Without it, the image has no network
-configuration at all. The configuration of the kiosk must also enable the
-updates (`[updates]`).
+wired network), systemd-resolved, freshclam, the `usb-pasteur-update` timer
+and a firewall that only lets the update service out
+(`image/mkosi.profiles/online/`). Its `postinst.chroot` enables `[updates]`
+in the configuration of the kiosk, and installs the credentials of
+`image/credentials.toml` (outside git) in `/etc/credstore`: an image built
+with them must not be published. Without the profile, the image has no
+network configuration at all.
+
+```sh
+cp image/credentials.toml.example image/credentials.toml   # then the abuse.ch Auth-Key
+image/build.sh --profile online
+```
 
 ## Test profile
 

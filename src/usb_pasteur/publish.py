@@ -27,6 +27,7 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
@@ -36,6 +37,7 @@ from pathlib import Path, PurePosixPath
 from typing import IO
 
 from usb_pasteur import sigsets
+from usb_pasteur.config import SIGNATURE_SOURCES
 
 YARA_FORGE = (
     "https://github.com/YARAHQ/yara-forge/releases/latest/download/yara-forge-rules-core.zip"
@@ -45,7 +47,7 @@ MALWAREBAZAAR = "https://bazaar.abuse.ch/export/txt/sha256/full/"
 HASHLOOKUP = "https://cra.circl.lu/hashlookup/hashlookup-full.bloom"
 CLAMAV_MIRROR = "database.clamav.net"
 
-SOURCES = ("clamav", "yara-forge", "signature-base", "malwarebazaar", "hashlookup")
+SOURCES = SIGNATURE_SOURCES
 # signature-base is opt-in: YARA Forge already includes its rules
 DEFAULT_SOURCES = ("clamav", "yara-forge", "malwarebazaar", "hashlookup")
 
@@ -72,21 +74,55 @@ class Download:
     sha256: str
     # Not modified since the previous download (served from the cache)
     cached: bool
+    # When it was downloaded (ISO 8601): unchanged for a cached file
+    date: str = ""
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow redirects to HTTPS URLs only (urllib also follows ftp and http)."""
+
+    def __init__(self, allow_http: bool) -> None:
+        self.schemes = ("https://", "http://") if allow_http else ("https://",)
+
+    def redirect_request(  # type: ignore[no-untyped-def]
+        self, req, fp, code, msg, headers, newurl
+    ) -> urllib.request.Request | None:
+        if not newurl.startswith(self.schemes):
+            raise PublishError(f"{req.full_url}: redirect to {newurl} refused")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class Downloader:
-    """HTTPS downloads, cached with their ETag and Last-Modified headers."""
+    """HTTPS downloads, cached with their ETag and Last-Modified headers.
 
-    def __init__(self, cache: Path, log: Callable[[str], None] = print) -> None:
+    proxy: the only proxy used ("": direct, never the proxy of the
+    environment). allow_http: also http:// URLs (mirrors configured on a
+    kiosk).
+    """
+
+    def __init__(
+        self,
+        cache: Path,
+        log: Callable[[str], None] = print,
+        proxy: str = "",
+        timeout: float = 300.0,
+        allow_http: bool = False,
+    ) -> None:
         self.cache = cache
         self.log = log
+        self.timeout = timeout
+        self.schemes = ("https://", "http://") if allow_http else ("https://",)
+        proxies = {"http": proxy, "https": proxy} if proxy else {}
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler(proxies), _SafeRedirect(allow_http)
+        )
 
     def open(self, url: str, headers: Mapping[str, str]) -> IO[bytes]:
         """Open url; raise urllib.error.HTTPError (304 when not modified)."""
-        if not url.startswith("https://"):
+        if not url.startswith(self.schemes):
             raise PublishError(f"not an HTTPS URL: {url}")
-        request = urllib.request.Request(url, headers=dict(headers))  # noqa: S310  (HTTPS)
-        response: IO[bytes] = urllib.request.urlopen(request, timeout=300)  # noqa: S310
+        request = urllib.request.Request(url, headers=dict(headers))  # noqa: S310  (checked)
+        response: IO[bytes] = self.opener.open(request, timeout=self.timeout)
         return response
 
     def fetch(self, url: str, name: str, headers: Mapping[str, str] | None = None) -> Download:
@@ -108,7 +144,9 @@ class Downloader:
         except urllib.error.HTTPError as ex:
             if ex.code == 304 and target.exists():
                 self.log(f"{name}: not modified")
-                return Download(target, str(meta.get("sha256", "")), cached=True)
+                return Download(
+                    target, str(meta.get("sha256", "")), cached=True, date=str(meta.get("date", ""))
+                )
             raise PublishError(f"{url}: HTTP {ex.code}") from ex
         except (urllib.error.URLError, OSError) as ex:
             raise PublishError(f"{url}: {ex}") from ex
@@ -131,7 +169,7 @@ class Downloader:
             "date": datetime.now(UTC).isoformat(timespec="seconds"),
         }
         meta_path.write_text(json.dumps(meta, indent=1) + "\n")
-        return Download(target, digest.hexdigest(), cached=False)
+        return Download(target, digest.hexdigest(), cached=False, date=meta["date"])
 
 
 def _describe(folder: Path, name: str, source: str, version: str = "") -> None:
@@ -152,8 +190,8 @@ def _describe(folder: Path, name: str, source: str, version: str = "") -> None:
 # -- sources -------------------------------------------------------------------------
 
 
-def fetch_yara_forge(downloader: Downloader, output: Path) -> None:
-    archive = downloader.fetch(YARA_FORGE, "yara-forge-rules-core.zip")
+def fetch_yara_forge(downloader: Downloader, output: Path, url: str = YARA_FORGE) -> None:
+    archive = downloader.fetch(url, "yara-forge-rules-core.zip")
     target = output / YARA_FORGE_RULES
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -162,11 +200,11 @@ def fetch_yara_forge(downloader: Downloader, output: Path) -> None:
             target.write_bytes(z.read(member))
     except (zipfile.BadZipFile, StopIteration) as ex:
         raise PublishError("YARA Forge: no yara-rules-core.yar in the archive") from ex
-    _describe(target.parent, target.name, YARA_FORGE, archive.sha256[:16])
+    _describe(target.parent, target.name, url, archive.sha256[:16])
 
 
-def fetch_signature_base(downloader: Downloader, output: Path) -> None:
-    archive = downloader.fetch(SIGNATURE_BASE, "signature-base.tar.gz")
+def fetch_signature_base(downloader: Downloader, output: Path, url: str = SIGNATURE_BASE) -> None:
+    archive = downloader.fetch(url, "signature-base.tar.gz")
     folder = output / SIGNATURE_BASE_RULES
     folder.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive.path) as tar:
@@ -184,10 +222,12 @@ def fetch_signature_base(downloader: Downloader, output: Path) -> None:
             source = tar.extractfile(member)
             if source is not None:
                 (folder / parts[2]).write_bytes(source.read())
-    _describe(folder.parent, folder.name, SIGNATURE_BASE, archive.sha256[:16])
+    _describe(folder.parent, folder.name, url, archive.sha256[:16])
 
 
-def fetch_malwarebazaar(downloader: Downloader, output: Path, auth_key: str) -> None:
+def fetch_malwarebazaar(
+    downloader: Downloader, output: Path, auth_key: str, url: str = MALWAREBAZAAR
+) -> None:
     from usb_pasteur.hashdb import HashDatabaseError, read_export, write_database
 
     if not auth_key:
@@ -195,35 +235,52 @@ def fetch_malwarebazaar(downloader: Downloader, output: Path, auth_key: str) -> 
             "MalwareBazaar needs an abuse.ch Auth-Key (free: https://auth.abuse.ch/): "
             "set ABUSECH_AUTH_KEY, or leave malwarebazaar out of --sources"
         )
-    export = downloader.fetch(
-        MALWAREBAZAAR, "malwarebazaar-full-sha256.zip", {"Auth-Key": auth_key}
-    )
+    export = downloader.fetch(url, "malwarebazaar-full-sha256.zip", {"Auth-Key": auth_key})
     target = output / MALWAREBAZAAR_DB
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         digests, source_sha256 = read_export(export.path)
-        count = write_database(digests, target, source_sha256)
+        # Dated by the download: an unchanged export gives the same database
+        created = int(datetime.fromisoformat(export.date).timestamp()) if export.date else None
+        count = write_database(digests, target, source_sha256, created)
     except HashDatabaseError as ex:
         raise PublishError(f"MalwareBazaar: {ex}") from ex
-    _describe(target.parent, target.name, MALWAREBAZAAR, f"{count} hashes")
+    _describe(target.parent, target.name, url, f"{count} hashes")
 
 
-def fetch_hashlookup(downloader: Downloader, output: Path) -> None:
-    bloom = downloader.fetch(HASHLOOKUP, "hashlookup-full.bloom")
+def fetch_hashlookup(downloader: Downloader, output: Path, url: str = HASHLOOKUP) -> None:
+    bloom = downloader.fetch(url, "hashlookup-full.bloom")
     target = output / HASHLOOKUP_BLOOM
     target.parent.mkdir(parents=True, exist_ok=True)
     _link_or_copy(bloom.path, target)
-    _describe(target.parent, target.name, HASHLOOKUP, bloom.sha256[:16])
+    _describe(target.parent, target.name, url, bloom.sha256[:16])
 
 
-def fetch_clamav(cache: Path, output: Path, freshclam: str = FRESHCLAM) -> None:
-    """Update the ClamAV databases of the cache with freshclam, then copy them."""
+def fetch_clamav(
+    cache: Path,
+    output: Path,
+    freshclam: str = FRESHCLAM,
+    mirror: str = "",
+    proxy: str = "",
+    test_databases: bool = True,
+) -> None:
+    """Update the ClamAV databases of the cache with freshclam, then copy them.
+
+    mirror: a private mirror in place of the ClamAV mirror. test_databases:
+    freshclam loads the new databases to check them (as much memory as clamd).
+    """
     datadir = cache / "clamav"
     datadir.mkdir(parents=True, exist_ok=True)
+    lines = [f"DatabaseDirectory {datadir}", "Foreground yes"]
+    lines.append(f"PrivateMirror {mirror}" if mirror else f"DatabaseMirror {CLAMAV_MIRROR}")
+    if proxy:
+        parts = urllib.parse.urlsplit(proxy)
+        lines.append(f"HTTPProxyServer {parts.scheme}://{parts.hostname}")
+        lines.append(f"HTTPProxyPort {parts.port or 3128}")
+    if not test_databases:
+        lines.append("TestDatabases no")
     config = cache / "freshclam.conf"
-    config.write_text(
-        f"DatabaseDirectory {datadir}\nDatabaseMirror {CLAMAV_MIRROR}\nForeground yes\n"
-    )
+    config.write_text("\n".join(lines) + "\n")
     result = subprocess.run(  # noqa: S603  (fixed command, no shell)
         [freshclam, f"--config-file={config}", f"--datadir={datadir}", "--stdout"],
         capture_output=True,
@@ -241,7 +298,7 @@ def fetch_clamav(cache: Path, output: Path, freshclam: str = FRESHCLAM) -> None:
         if not found:
             raise PublishError(f"ClamAV: no {name} database after freshclam")
         _link_or_copy(found[0], folder / found[0].name)
-        _describe(folder, found[0].name, f"https://{CLAMAV_MIRROR}/")
+        _describe(folder, found[0].name, mirror or f"https://{CLAMAV_MIRROR}/")
 
 
 def _link_or_copy(source: Path, target: Path) -> None:
@@ -302,6 +359,36 @@ def check_set(output: Path, sources: Sequence[str], clamscan: str = CLAMSCAN) ->
 # -- publication ---------------------------------------------------------------------
 
 
+# Folder of the files of each source, in a set
+SOURCE_FOLDERS = {
+    "clamav": f"{CLAMAV_FOLDER}/",
+    "yara-forge": "yara/yara-forge/",
+    "signature-base": f"{SIGNATURE_BASE_RULES}/",
+    "malwarebazaar": "malwarebazaar/",
+    "hashlookup": "hashlookup/",
+}
+
+
+def keep_files(installed: Path, staging: Path, sources: Sequence[str]) -> int:
+    """Copy the files of the installed set that the sources do not replace.
+
+    A kiosk that downloads some sources only (or that has no abuse.ch key)
+    keeps the other signatures, from its last signature update device.
+    Return the number of files kept.
+    """
+    manifest = sigsets.parse_manifest((installed / sigsets.MANIFEST).read_bytes())
+    replaced = tuple(SOURCE_FOLDERS[source] for source in sources)
+    kept = 0
+    for entry in manifest.files:
+        if entry.path.startswith(replaced):
+            continue
+        target = staging / entry.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _link_or_copy(installed / entry.path, target)
+        kept += 1
+    return kept
+
+
 def publish(
     output: Path,
     sources: Sequence[str],
@@ -313,27 +400,43 @@ def publish(
     freshclam: str = FRESHCLAM,
     clamscan: str = CLAMSCAN,
     log: Callable[[str], None] = print,
+    mirrors: Mapping[str, str] | None = None,
+    keep_from: Path | None = None,
+    proxy: str = "",
+    test_databases: bool = True,
 ) -> sigsets.Manifest:
-    """Build the set in a new folder, check it, sign it, then replace output."""
+    """Build the set in a new folder, check it, sign it, then replace output.
+
+    mirrors: URLs in place of those of the sources. keep_from: an installed
+    set whose files the sources do not replace are kept. key None: not
+    signed (a kiosk signs the set it builds with its own key).
+    """
     unknown = set(sources) - set(SOURCES)
     if unknown or not sources:
         raise PublishError(f"unknown sources: {', '.join(sorted(unknown))}")
-    downloader = downloader or Downloader(cache / "downloads", log)
+    mirrors = mirrors or {}
+    downloader = downloader or Downloader(cache / "downloads", log, proxy)
     staging = output.with_name(f".{output.name}.staging")
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
     try:
         if "clamav" in sources:
             log("clamav: freshclam")
-            fetch_clamav(cache, staging, freshclam)
+            fetch_clamav(
+                cache, staging, freshclam, mirrors.get("clamav", ""), proxy, test_databases
+            )
         if "yara-forge" in sources:
-            fetch_yara_forge(downloader, staging)
+            fetch_yara_forge(downloader, staging, mirrors.get("yara-forge", YARA_FORGE))
         if "signature-base" in sources:
-            fetch_signature_base(downloader, staging)
+            fetch_signature_base(downloader, staging, mirrors.get("signature-base", SIGNATURE_BASE))
         if "malwarebazaar" in sources:
-            fetch_malwarebazaar(downloader, staging, auth_key)
+            fetch_malwarebazaar(
+                downloader, staging, auth_key, mirrors.get("malwarebazaar", MALWAREBAZAAR)
+            )
         if "hashlookup" in sources:
-            fetch_hashlookup(downloader, staging)
+            fetch_hashlookup(downloader, staging, mirrors.get("hashlookup", HASHLOOKUP))
+        if keep_from is not None:
+            log(f"{keep_files(keep_from, staging, sources)} files kept from the installed set")
         log("checking the set with the kiosk engines")
         for warning in check_set(staging, sources, clamscan):
             log(f"WARNING: {warning}")

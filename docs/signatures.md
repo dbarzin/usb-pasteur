@@ -65,42 +65,85 @@ The kiosk shows and logs the result (`signatures_installed`,
 
 ## Online updates
 
-A kiosk works offline by default. Online updates need both:
+A kiosk works offline by default. An image built with the **profile
+`online`** (`image/build.sh --profile online`) updates its signatures
+itself, **from their sources**: ClamAV (freshclam), YARA Forge, MalwareBazaar
+and Hashlookup, the sources of `usb-pasteur-signatures publish`. The profile
+brings DHCP on the wired network (IPv4), DNS (systemd-resolved, without LLMNR
+or mDNS), freshclam, the `usb-pasteur-update` timer (every 6 hours, 5 minutes
+after boot), and a firewall that only lets out the update service (TCP),
+DHCP and DNS. Nothing comes in but the answers to these connections. It
+enables the `[updates]` section of the configuration with every source:
 
-- an image built with the **profile `online`** (`image/build.sh --profile
-  online`): DHCP on the wired network (IPv4), DNS (systemd-resolved, without
-  LLMNR or mDNS), the `usb-pasteur-update` timer (every 6 hours, 5 minutes
-  after boot), and a firewall that only lets out the update service (TCP),
-  DHCP and DNS. Nothing comes in but the answers to these connections;
-- the **`[updates]` section** of the configuration: `enabled = true`, the
-  `url` of a published set (the folder written by
-  `usb-pasteur-signatures publish`, served by any web server), and a `proxy`
-  when needed.
+```toml
+[updates]
+enabled = true
+sources = ["clamav", "yara-forge", "malwarebazaar", "hashlookup"]
+# Optional: a company mirror in place of a source ("clamav": a freshclam
+# private mirror), and a proxy
+# mirrors = { hashlookup = "https://mirror.example.org/hashlookup-full.bloom" }
+# proxy = "http://proxy.example.org:3128"
+```
 
-The same service also installs online image updates (`updates.image_url`,
-see [image.md](image.md#ab-updates-of-the-image)).
+### Credentials
+
+MalwareBazaar needs an **abuse.ch Auth-Key** (free account:
+https://auth.abuse.ch/). It is given at build time in `image/credentials.toml`
+(see `image/credentials.toml.example`; git ignores the file), and the profile
+installs it on the read-only root filesystem as a **systemd credential**,
+`/etc/credstore/usb-pasteur.abusech-auth-key`, readable by root only: systemd
+gives it to the update service alone (`ImportCredential=`). Without it,
+MalwareBazaar is not downloaded and its database is kept from the last
+signature update device.
+
+An image built with credentials **must not be published**: anyone with the
+image or the disk of the kiosk can read them.
+
+### The update service
 
 `usb-pasteur-update.service` runs in two steps
 (`src/usb_pasteur/online.py`):
 
 1. as the `usb-pasteur-update` user, the only one the firewall lets out,
-   without privileges and in a systemd sandbox, it downloads `manifest.json`
-   and its signature, verifies them and, when the set is newer than the
-   installed one, downloads the files that changed (each checked against its
-   size and SHA-256) into `/var/lib/usb-pasteur-update/staging`;
-2. as root, without network, it installs the staged set (`install
-   --staged`): every check of a signature update device applies, the
-   unchanged files are taken from the installed set.
+   without privileges and in a systemd sandbox, it downloads the sources
+   (with an HTTP cache, `/var/lib/usb-pasteur-update/staging-sources`: an
+   unchanged source is not downloaded again; freshclam downloads the daily
+   differences of ClamAV), checks that the engines load them, and builds a
+   set in `/var/lib/usb-pasteur-update/staging` when they changed. The files
+   of the sources it does not download are taken from the installed set;
+2. as root, without network, it signs the staged set with the **key of the
+   kiosk** and installs it (`install --staged`): every check of a signature
+   update device applies, the unchanged files are taken from the installed
+   set.
+
+The key of the kiosk is an Ed25519 key generated on the kiosk the first time
+(`/var/lib/usb-pasteur-signatures/local-key/`, the private key readable by
+root only). The kiosk trusts it besides the keys of its image: it verifies
+the installed set at each start, whoever signed it. Signature update devices
+signed with the update key are still accepted (a kiosk without network, or
+signatures newer than the last download).
 
 The kiosk loads the new set the next time it is idle (between two devices):
 a scan is never interrupted. It logs `signatures_changed` and shows `New
 signatures installed`.
 
-The set is signed: HTTPS is recommended, HTTP is accepted (for an internal
-mirror). Redirects are only followed to http(s) URLs, and the proxy of the
-environment is ignored: only `updates.proxy` is used. A server that keeps
-serving an old set only delays the updates: the kiosk warns when its
-signatures get old (`signatures.max_age_days`).
+The downloads are HTTPS (a mirror configured in `updates.mirrors` may be
+HTTP); the ClamAV databases carry the signature of Cisco Talos, verified by
+freshclam. freshclam does not load the new databases to test them
+(`TestDatabases no`): clamd already holds them in memory, a kiosk has 2 GB.
+Redirects are only followed to HTTPS URLs, and the proxy of the environment
+is ignored: only `updates.proxy` is used.
+
+### A published set instead
+
+A kiosk can also download a signed set published by
+`usb-pasteur-signatures publish` on a web server, in place of the sources:
+`url` (the folder of the set) instead of `sources`. It then needs no
+credential, and only installs a set signed with the update key, newer than
+the installed one, downloading only the files that changed.
+
+The same service also installs online image updates (`updates.image_url`,
+see [image.md](image.md#ab-updates-of-the-image)).
 
 ## Publishing a set
 

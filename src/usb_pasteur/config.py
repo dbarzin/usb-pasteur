@@ -180,14 +180,24 @@ class LoggingConfig:
     level: str = "INFO"
 
 
+# Sources of the signatures a kiosk can download itself (usb_pasteur.publish)
+SIGNATURE_SOURCES = ("clamav", "yara-forge", "signature-base", "malwarebazaar", "hashlookup")
+
+
 @dataclass(frozen=True)
 class UpdatesConfig:
     # Online signature updates (usb-pasteur-update.service, image profile
     # "online"): off by default, a kiosk works offline
     enabled: bool = False
-    # Folder of a published signature set (manifest.json, its signature and
-    # the files): HTTPS recommended, HTTP accepted (the set is signed)
+    # Either the kiosk downloads the signatures from their sources (sources,
+    # docs/signatures.md) and signs the set with its own key, or it
+    # downloads a signed set published by usb-pasteur-signatures publish
+    # (url: its folder, HTTPS recommended, HTTP accepted as the set is signed)
+    sources: tuple[str, ...] = ()
     url: str = ""
+    # URLs in place of the default ones of the sources, e.g. a company mirror
+    # ("clamav": a freshclam private mirror)
+    mirrors: dict[str, str] = field(default_factory=dict)
     # Folder of a published image update (usb_pasteur.imageupdate): "" for no
     # online image updates
     image_url: str = ""
@@ -378,12 +388,28 @@ def parse_config(data: dict[str, Any]) -> Config:
 def _parse_updates(updates: dict[str, Any]) -> UpdatesConfig:
     _reject_unknown(
         updates,
-        {"enabled", "url", "image_url", "proxy", "timeout", "image_from_devices"},
+        {"enabled", "sources", "url", "mirrors", "image_url", "proxy", "timeout",
+         "image_from_devices"},
         "updates",
-    )
+    )  # fmt: skip
+    sources = _get(updates, "updates", "sources", list, [])
+    for source in sources:
+        if source not in SIGNATURE_SOURCES:
+            raise ConfigError(
+                f"updates.sources: unknown source {source!r} "
+                f"(known: {', '.join(SIGNATURE_SOURCES)})"
+            )
+    mirrors = _get(updates, "updates", "mirrors", dict, {})
+    for source, url in mirrors.items():
+        if source not in SIGNATURE_SOURCES:
+            raise ConfigError(f"updates.mirrors: unknown source {source!r}")
+        if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+            raise ConfigError(f"updates.mirrors.{source} must be an http:// or https:// URL")
     config = UpdatesConfig(
         enabled=_get(updates, "updates", "enabled", bool, False),
+        sources=tuple(dict.fromkeys(sources)),
         url=_get(updates, "updates", "url", str, ""),
+        mirrors=dict(mirrors),
         image_url=_get(updates, "updates", "image_url", str, ""),
         proxy=_get(updates, "updates", "proxy", str, ""),
         timeout=_positive(updates, "updates", "timeout", UpdatesConfig.timeout),
@@ -396,8 +422,10 @@ def _parse_updates(updates: dict[str, Any]) -> UpdatesConfig:
     ):
         if value and not value.startswith(("https://", "http://")):
             raise ConfigError(f"updates.{key} must be an http:// or https:// URL")
-    if config.enabled and not config.url:
-        raise ConfigError("updates.url is required when updates are enabled")
+    if config.sources and config.url:
+        raise ConfigError("updates: sources (download from the sources) or url, not both")
+    if config.enabled and not (config.sources or config.url):
+        raise ConfigError("updates.sources or updates.url is required when updates are enabled")
     return config
 
 

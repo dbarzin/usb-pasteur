@@ -24,6 +24,13 @@ the size and SHA-256 of the manifest. Installed sets live in:
 The engines read their files through "current". The kiosk verifies the
 installed set again (signature and every file) at each start.
 
+A kiosk that downloads the signatures from their sources (updates.sources,
+usb_pasteur.online) signs the set it builds with its own key, generated on
+the kiosk, which it also trusts:
+
+    <signatures.folder>/local-key/local.key   (root only)
+    <signatures.folder>/local-key/local.pem
+
 Signature sets are built and signed with the usb-pasteur-signatures command
 (see main): signing uses openssl, so that the key can live in a hardware token
 through an OpenSSL provider.
@@ -60,6 +67,7 @@ SIGNATURE = "manifest.json.sig"
 UPDATE_FOLDER = "usb-pasteur-signatures"
 CURRENT = "current"
 SETS = "sets"
+LOCAL_KEY = "local-key"
 
 MAX_MANIFEST_SIZE = 16 * 1024 * 1024
 MAX_SIGNATURE_SIZE = 4096
@@ -175,6 +183,36 @@ def validate_path(path: object) -> str:
 
 
 # -- signatures ------------------------------------------------------------------------
+
+
+def local_public_keys(folder: Path) -> list[Path]:
+    """The public key of the kiosk itself, when it has one (signatures.folder)."""
+    path = folder / LOCAL_KEY / "local.pem"
+    return [path] if path.is_file() else []
+
+
+def local_key(folder: Path) -> Path:
+    """The private key of the kiosk (signatures.folder), created when missing."""
+    directory = folder / LOCAL_KEY
+    key, public = directory / "local.key", directory / "local.pem"
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o755)
+    if not key.exists():
+        partial = directory / ".local.key"
+        partial.unlink(missing_ok=True)
+        subprocess.run(  # noqa: S603  (fixed command, no shell)
+            [OPENSSL, "genpkey", "-algorithm", "ed25519", "-out", str(partial)],
+            check=True, capture_output=True, timeout=60,
+        )  # fmt: skip
+        partial.chmod(0o600)
+        partial.rename(key)
+    if not public.exists():
+        subprocess.run(  # noqa: S603  (fixed command, no shell)
+            [OPENSSL, "pkey", "-in", str(key), "-pubout", "-out", str(public)],
+            check=True, capture_output=True, timeout=60,
+        )  # fmt: skip
+        public.chmod(0o644)
+    return key
 
 
 def trusted_keys(folder: Path) -> list[Path]:
@@ -524,8 +562,17 @@ def main(argv: list[str] | None = None) -> int:
                 help="a set staged by download: nothing staged or not newer is not an error,"
                 " and the staged files are removed",
             )
+            p.add_argument(
+                "--config",
+                type=Path,
+                default=Path("/etc/usb-pasteur/usb-pasteur.toml"),
+                help="with --staged: a kiosk that downloads the signatures from their"
+                " sources signs the staged set with its own key",
+            )
     p_download = sub.add_parser(
-        "download", help="download the published set (updates.url) when it is newer"
+        "download",
+        help="build a set from the sources (updates.sources), or download the published"
+        " set (updates.url), when it is newer",
     )
     p_download.add_argument("--staging", type=Path, required=True)
     p_download.add_argument(
@@ -577,17 +624,35 @@ def _download(args: argparse.Namespace) -> int:
     return 0
 
 
+def _builds_from_sources(config_path: Path) -> bool:
+    """The kiosk downloads the signatures from their sources (updates.sources)."""
+    from usb_pasteur.config import ConfigError, load_config
+
+    if not config_path.exists():
+        return False
+    try:
+        updates = load_config(config_path).updates
+    except ConfigError:
+        return False
+    return updates.enabled and bool(updates.sources)
+
+
 def _install_staged(args: argparse.Namespace) -> int:
     if not (args.folder / MANIFEST).exists():
         print("no signature set staged")
         return 0
     status = 0
+    keys = trusted_keys(args.keys)
     try:
-        manifest = install(args.folder, args.target, trusted_keys(args.keys))
+        if _builds_from_sources(args.config):
+            # Built by the update service of this kiosk: signed with its own key
+            sign(args.folder, local_key(args.target))
+            keys += local_public_keys(args.target)
+        manifest = install(args.folder, args.target, keys)
         print(f"serial {manifest.serial} installed in {args.target}")
     except NotNewerError as ex:
         print(f"not installed: {ex}")
-    except (SignatureSetError, OSError) as ex:
+    except (SignatureSetError, OSError, subprocess.CalledProcessError) as ex:
         print(f"usb-pasteur-signatures: {ex}", file=sys.stderr)
         status = 1
     for path in args.folder.iterdir():

@@ -41,7 +41,9 @@ UPDATE_KEY = Path("image/update.key")
 IMAGE_UPDATES = Path("image/mkosi.output/updates")
 # Published for the online update test: http://10.0.2.2:8080/ in the machine
 PUBLISH_PORT = 8080
-PUBLISHED = "usb-pasteur-signatures"
+SOURCES = "sources"
+# The abuse.ch Auth-Key of the test profile (/etc/credstore)
+AUTH_KEY = "vm-test-auth-key"
 
 LOG = "/var/log/usb-pasteur/usb-pasteur.log"
 # Discoverable Partitions Specification: root partition of x86-64
@@ -410,7 +412,7 @@ def count_reports(vm: Machine) -> int:
     return int(vm.shell.run(f"ls {REPORTS} | wc -l"))
 
 
-def check_reboot(vm: Machine, timeout: float) -> None:
+def check_reboot(vm: Machine, timeout: float, signature_set: int) -> None:
     step("reboot: the data is kept, the system is unchanged, no boot menu")
     reports = count_reports(vm)
     before = count_events(vm, "kiosk_started")
@@ -432,14 +434,14 @@ def check_reboot(vm: Machine, timeout: float) -> None:
     check(b"Debian GNU/Linux 13 (trixie) (" not in console, "the boot loader menu opened")
     started = wait_next_event(vm, "kiosk_started", before, timeout=timeout)
     check(started["ready"], "the kiosk cannot scan after a reboot")
-    check(started["signature_set"] == 5, f"signature set after a reboot: {started}")
+    check(started["signature_set"] == signature_set, f"signature set after a reboot: {started}")
     check(count_reports(vm) == reports, "scan reports lost after a reboot")
     check(not vm.shell.succeeds("test -e /usr/test"), "the root filesystem changed")
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
     check(not failed, f"failed units:\n{failed}")
     loader = vm.shell.run("cat $(bootctl --print-esp-path)/loader/loader.conf")
     check("timeout menu-disabled" in loader, f"boot loader configuration:\n{loader}")
-    print(f"{reports} scan reports kept, signature set 5 verified at start")
+    print(f"{reports} scan reports kept, signature set {signature_set} verified at start")
     print("keys pressed at boot: the boot loader menu stays closed")
 
 
@@ -528,7 +530,10 @@ def check_signature_update(vm: Machine, workdir: Path) -> None:
 
 
 class Publisher:
-    """HTTP server publishing signature sets for the machine; it records the requests."""
+    """HTTP server publishing files for the machine; it records the requests.
+
+    The MalwareBazaar export needs the abuse.ch Auth-Key of the test profile.
+    """
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -538,6 +543,9 @@ class Publisher:
         class Handler(SimpleHTTPRequestHandler):
             def do_GET(self) -> None:
                 publisher.requests.append(self.path)
+                if "malwarebazaar" in self.path and self.headers["Auth-Key"] != AUTH_KEY:
+                    self.send_error(401, "Auth-Key")
+                    return
                 super().do_GET()
 
             def log_message(self, *args: object) -> None:
@@ -554,26 +562,69 @@ class Publisher:
         self.httpd.server_close()
 
 
-def check_online_update(vm: Machine, workdir: Path) -> None:
-    step("online signature update")
+def publish_sources(folder: Path, malwarebazaar: tuple[bytes, ...]) -> None:
+    """The files of the sources of the test profile (updates.mirrors)."""
+    import io
+    import zipfile
+
+    from usb_pasteur.bloom import write_filter
+
+    folder.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(folder / "yara-forge-rules-core.zip", "w") as z:
+        z.writestr("packages/core/yara-rules-core.yar", corpus.YARA_RULE)
+    export = "".join(f"{hashlib.sha256(s).hexdigest()}\n" for s in malwarebazaar)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as z:
+        z.writestr("full_sha256.txt", f"# MalwareBazaar export (VM test)\n{export}")
+    (folder / "malwarebazaar-full-sha256.zip").write_bytes(buffer.getvalue())
+    known = hashlib.sha1(corpus.KNOWN_FILE).hexdigest().upper().encode()
+    write_filter(folder / "hashlookup-full.bloom", [known])
+
+
+def check_online_update(vm: Machine, workdir: Path) -> int:
+    """Signatures downloaded from their sources; return the serial of the set."""
+    step("online signature update, from the sources")
     publisher = Publisher(workdir / "www")
     try:
-        # A newer set than the installed one (2): only its MalwareBazaar
-        # database changed
-        folder = publisher.root / PUBLISHED
-        corpus.write_signatures(folder, (corpus.NEW_SAMPLE, b"published online"))
-        sigsets.build(folder, 5)
-        sigsets.sign(folder, UPDATE_KEY)
+        samples = (corpus.MALWAREBAZAAR_SAMPLE, corpus.NEW_SAMPLE, b"published online")
+        publish_sources(publisher.root / SOURCES, samples)
         before = count_events(vm, "engines_reloaded")
-        output = vm.shell.run("systemctl start usb-pasteur-update.service", timeout=300)
+        output = vm.shell.run("systemctl start usb-pasteur-update.service", timeout=600)
         changed = wait_event(vm, "signatures_changed")
-        check(changed["serial"] == 5, f"online set: {changed}")
+        serial = int(changed["serial"])
         wait_next_event(vm, "engines_reloaded", before)
-        files = sorted(p for p in publisher.requests if not p.endswith(("manifest.json", ".sig")))
-        check(files == [f"/{PUBLISHED}/{corpus.MALWAREBAZAAR_DB}"], f"downloaded: {files}")
+        # The same service also asks for an image update (updates.image_url)
+        files = sorted(p.rsplit("/", 1)[-1] for p in publisher.requests if "/sources/" in p)
+        expected = ["hashlookup-full.bloom", "malwarebazaar-full-sha256.zip",
+                    "yara-forge-rules-core.zip"]  # fmt: skip
+        check(files == expected, f"downloaded: {files}")
         current = vm.shell.run("readlink /var/lib/usb-pasteur-signatures/current").strip()
-        check(current == "sets/5", f"installed set: {current}, {output}")
-        print("set 5 downloaded (only the changed file), installed, loaded by the idle kiosk")
+        check(current == f"sets/{serial}", f"installed set: {current}, {output}")
+        # Signed with the key of the kiosk; ClamAV kept from the installed set
+        check(
+            vm.shell.succeeds("test -f /var/lib/usb-pasteur-signatures/local-key/local.pem"),
+            "no key of the kiosk",
+        )
+        mode = vm.shell.run("stat -c %a /var/lib/usb-pasteur-signatures/local-key/local.key")
+        check(mode.strip() == "600", f"key of the kiosk: mode {mode}")
+        check(
+            vm.shell.succeeds(
+                f"test -f /var/lib/usb-pasteur-signatures/current/{corpus.CLAMAV_DB}"
+            ),
+            "ClamAV database not kept",
+        )
+        print(f"set {serial} built from the sources, signed by the kiosk, loaded when idle")
+
+        # Unchanged sources (HTTP 304, Last-Modified): no new set
+        publisher.requests.clear()
+        vm.shell.run("systemctl start usb-pasteur-update.service", timeout=600)
+        check(count_events(vm, "signatures_changed") == 1, "a new set for unchanged sources")
+        check(
+            vm.shell.run("readlink /var/lib/usb-pasteur-signatures/current").strip()
+            == f"sets/{serial}",
+            "the set changed",
+        )
+        print("unchanged sources: no new set")
 
         # Only the update service may go out
         connect = (
@@ -586,8 +637,17 @@ def check_online_update(vm: Machine, workdir: Path) -> None:
             "the update service user cannot open a connection",
         )
         print("firewall: only the update service user can open a connection")
+        # Only the update service reads the credential
+        check(
+            not vm.shell.succeeds(
+                "setpriv --reuid=usb-pasteur-update --init-groups "
+                "cat /etc/credstore/usb-pasteur.abusech-auth-key"
+            ),
+            "the update user reads /etc/credstore",
+        )
     finally:
         publisher.stop()
+    return serial
 
 
 def image_state(vm: Machine) -> tuple[str, list[str], list[str]]:
@@ -923,12 +983,12 @@ def main(argv: list[str] | None = None) -> int:
                 check_filesystem_keys(vm, workdir)
                 check_refused_keys(vm, workdir)
                 check_signature_update(vm, workdir)
-                check_online_update(vm, workdir)
+                online_set = check_online_update(vm, workdir)
                 check_usb_policy(vm)
                 check_hardening(vm)
                 check_audit(vm)
                 run_lynis(vm)
-                check_reboot(vm, args.boot_timeout)
+                check_reboot(vm, args.boot_timeout, online_set)
                 check_image_update(vm, workdir, args.boot_timeout)
             current = workdir / "modified-root"
             check_modified_root(image, current, args.boot_timeout)

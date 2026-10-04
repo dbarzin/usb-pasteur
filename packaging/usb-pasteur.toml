@@ -179,9 +179,17 @@ update_from_devices = true
 # offline. They also need the image profile "online" (network, firewall, and
 # the usb-pasteur-update timer, every 6 hours).
 enabled = false
-# Folder of a published signature set (manifest.json, its signature and the
-# files). The set is signed: HTTPS is recommended, HTTP is accepted.
+# Either the kiosk downloads the signatures from their sources and signs
+# the set with its own key (MalwareBazaar needs an abuse.ch Auth-Key, a
+# credential of the image: docs/signatures.md)...
+sources = []
+# e.g. sources = ["clamav", "yara-forge", "malwarebazaar", "hashlookup"]
+# ...or it downloads a published signed set: the folder of the set
+# (manifest.json, its signature and the files). HTTPS is recommended, HTTP is
+# accepted.
 url = ""
+# URLs in place of the default ones of the sources, e.g. a company mirror:
+# mirrors = { clamav = "https://clamav.example.org", hashlookup = "https://..." }
 # Folder of a published image update (A/B updates, docs/image.md); "" for
 # no online image updates
 image_url = ""

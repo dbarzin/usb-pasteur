@@ -40,6 +40,7 @@ from usb_pasteur.sigsets import (
     current_set,
     install,
     installed_manifest,
+    local_public_keys,
     trusted_keys,
     verify_installed,
 )
@@ -122,7 +123,8 @@ def check_signatures(config: Config) -> Manifest | None:
     if config.kiosk.fake_scan or not config.signatures.verify:
         return None
     folder = config.signatures.folder
-    manifest = verify_installed(folder, trusted_keys(config.signatures.keys))
+    keys = trusted_keys(config.signatures.keys) + local_public_keys(folder)
+    manifest = verify_installed(folder, keys)
     current = current_path(folder)
     for path in signature_files(config):
         try:

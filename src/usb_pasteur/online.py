@@ -6,7 +6,15 @@ The update service runs in two steps:
 
        usb-pasteur-signatures download --staging DIR
 
-   downloads the manifest of the published set (updates.url) and its
+   either (updates.sources) downloads the signatures from their sources
+   (usb_pasteur.publish: freshclam, YARA Forge, MalwareBazaar, Hashlookup),
+   checks that the engines load them and builds an unsigned set in DIR when
+   they changed, the files of the other sources taken from the installed
+   set; MalwareBazaar needs the abuse.ch Auth-Key, a systemd credential of
+   the service (ImportCredential=usb-pasteur.*, /etc/credstore on the
+   read-only root filesystem);
+
+   or (updates.url) downloads the manifest of the published set and its
    signature, verifies them with the trusted keys and, when the set is newer
    than the installed one, downloads the files that changed into DIR, each
    checked against its size and SHA-256;
@@ -15,28 +23,33 @@ The update service runs in two steps:
 
        usb-pasteur-signatures install DIR --staged
 
-   installs the set: sigsets.install() verifies everything again and takes
-   the unchanged files from the installed set.
+   installs the set: a set built from the sources is first signed with the
+   key of the kiosk (sigsets.local_key), then sigsets.install() verifies
+   everything again and takes the unchanged files from the installed set.
 
-The kiosk loads the new set the next time it is idle. The published set is
+The kiosk loads the new set the next time it is idle. A published set is
 signed: HTTPS is recommended, HTTP is accepted (an internal mirror).
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 from usb_pasteur import sigsets
 from usb_pasteur.config import Config
 
 _CHUNK = 1024 * 1024
+# systemd credential of the update service holding the abuse.ch Auth-Key
+AUTH_KEY_CREDENTIAL = "usb-pasteur.abusech-auth-key"
 
 
 class UpdateError(Exception):
@@ -119,6 +132,8 @@ def download(
             shutil.rmtree(path)
         else:
             path.unlink()
+    if updates.sources:
+        return build_from_sources(config, staging, log=log)
     fetcher = fetcher or Fetcher(updates.proxy, updates.timeout)
     base = updates.url.rstrip("/") + "/"
 
@@ -147,4 +162,82 @@ def download(
     # Written last: a staged set is complete
     (staging / sigsets.SIGNATURE).write_bytes(signature)
     (staging / sigsets.MANIFEST).write_bytes(data)
+    return manifest
+
+
+def abusech_auth_key() -> str:
+    """The abuse.ch Auth-Key, from the credentials of the service ("": none)."""
+    folder = os.environ.get("CREDENTIALS_DIRECTORY", "")
+    if not folder:
+        return ""
+    try:
+        return (Path(folder) / AUTH_KEY_CREDENTIAL).read_text().strip()
+    except OSError:
+        return ""
+
+
+def _signature_files(manifest: sigsets.Manifest) -> dict[str, tuple[str, int]]:
+    """The files of a set, without the source descriptions (dated at each build)."""
+    return {
+        f.path: (f.sha256, f.size)
+        for f in manifest.files
+        if f.path.rsplit("/", 1)[-1] != sigsets.MANIFEST
+    }
+
+
+def build_from_sources(
+    config: Config,
+    staging: Path,
+    log: Callable[[str], None] = print,
+    auth_key: str | None = None,
+    **publish_options: Any,
+) -> sigsets.Manifest | None:
+    """Build a set from the sources in staging when they changed; return it.
+
+    The staged set is not signed: the install step signs it with the key of
+    the kiosk. publish_options: passed to publish() (tests).
+    """
+    from usb_pasteur.publish import Downloader, PublishError, publish
+
+    updates = config.updates
+    sources = list(updates.sources)
+    auth_key = abusech_auth_key() if auth_key is None else auth_key
+    if "malwarebazaar" in sources and not auth_key:
+        log("malwarebazaar: no abuse.ch Auth-Key (credential of the image): not downloaded")
+        sources.remove("malwarebazaar")
+    if not sources:
+        return None
+    folder = config.signatures.folder
+    installed = sigsets.installed_manifest(folder)
+    current = sigsets.current_set(folder) if installed is not None else None
+    cache = staging.with_name(f"{staging.name}-sources")
+    allow_http = any(url.startswith("http://") for url in updates.mirrors.values())
+    publish_options.setdefault(
+        "downloader",
+        Downloader(cache / "downloads", log, updates.proxy, updates.timeout, allow_http),
+    )
+    try:
+        manifest = publish(
+            staging,
+            sources,
+            cache,
+            None,
+            auth_key=auth_key,
+            log=log,
+            mirrors=updates.mirrors,
+            keep_from=current,
+            proxy=updates.proxy,
+            # freshclam would load the databases again, besides clamd: the
+            # ClamAV signature of the databases is still verified
+            test_databases=False,
+            **publish_options,
+        )
+    except (PublishError, subprocess.SubprocessError) as ex:
+        raise UpdateError(str(ex)) from ex
+    if installed is not None and _signature_files(manifest) == _signature_files(installed):
+        shutil.rmtree(staging)
+        staging.mkdir()
+        log(f"up to date: the sources did not change since set {installed.serial}")
+        return None
+    log(f"set {manifest.serial} built from {', '.join(sources)}: {len(manifest.files)} files")
     return manifest

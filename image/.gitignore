@@ -5,3 +5,5 @@
 /mkosi.crt
 /update.key
 /update.pem
+# Credentials of the profile online (credentials.toml.example)
+/credentials.toml
