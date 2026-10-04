@@ -260,9 +260,9 @@ Tasks:
 - [ ] Software TPM (`swtpm`), once measured boot is used
 - [x] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4), plus partitioned, unsupported and corrupted filesystems
 - [x] An emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard: no input device, no network interface
-- [ ] No outgoing network outside the update channel
+- [x] No outgoing network outside the update channel
 - [x] A/B update and rollback tested in the virtual machine
-- [ ] Run in continuous integration (KVM when nested virtualization is available, TCG emulation otherwise)
+- [x] Run in continuous integration (KVM when nested virtualization is available, TCG emulation otherwise)
 
 ## Phase 3 — Kiosk interface
 
