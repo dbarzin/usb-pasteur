@@ -2,8 +2,8 @@
 
 The detection engines of a kiosk only use a **signed signature set**,
 verified at each start. A set is installed from a **signature update
-device**: a USB key holding a set, for kiosks without network. Online updates
-come later (phase 2).
+device** (a USB key holding a set, for kiosks without network) or, when it is
+enabled, **online** from a published set.
 
 ## Signature sets
 
@@ -62,6 +62,42 @@ other files.
 
 The kiosk shows and logs the result (`signatures_installed`,
 `signatures_refused` with the reason, or `signatures_not_newer`).
+
+## Online updates
+
+A kiosk works offline by default. Online updates need both:
+
+- an image built with the **profile `online`** (`image/build.sh --profile
+  online`): DHCP on the wired network (IPv4), DNS (systemd-resolved, without
+  LLMNR or mDNS), the `usb-pasteur-update` timer (every 6 hours, 5 minutes
+  after boot), and a firewall that only lets out the update service (TCP),
+  DHCP and DNS. Nothing comes in but the answers to these connections;
+- the **`[updates]` section** of the configuration: `enabled = true`, the
+  `url` of a published set (the folder written by
+  `usb-pasteur-signatures publish`, served by any web server), and a `proxy`
+  when needed.
+
+`usb-pasteur-update.service` runs in two steps
+(`src/usb_pasteur/online.py`):
+
+1. as the `usb-pasteur-update` user, the only one the firewall lets out,
+   without privileges and in a systemd sandbox, it downloads `manifest.json`
+   and its signature, verifies them and, when the set is newer than the
+   installed one, downloads the files that changed (each checked against its
+   size and SHA-256) into `/var/lib/usb-pasteur-update/staging`;
+2. as root, without network, it installs the staged set (`install
+   --staged`): every check of a signature update device applies, the
+   unchanged files are taken from the installed set.
+
+The kiosk loads the new set the next time it is idle (between two devices):
+a scan is never interrupted. It logs `signatures_changed` and shows `New
+signatures installed`.
+
+The set is signed: HTTPS is recommended, HTTP is accepted (for an internal
+mirror). Redirects are only followed to http(s) URLs, and the proxy of the
+environment is ignored: only `updates.proxy` is used. A server that keeps
+serving an old set only delays the updates: the kiosk warns when its
+signatures get old (`signatures.max_age_days`).
 
 ## Publishing a set
 

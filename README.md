@@ -179,7 +179,7 @@ Goal: ship a ready-to-flash system image with the smallest possible attack surfa
 
 ### Current status
 
-A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox) and the scan workers run in a sandbox (bubblewrap, dedicated user, system call filter). The kiosk only uses a signed signature set, verified at each start; without one, it scans nothing and waits for a signature update device. See [docs/image.md](docs/image.md):
+A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox) and the scan workers run in a sandbox (bubblewrap, dedicated user, system call filter). The kiosk only uses a signed signature set, verified at each start; without one, it scans nothing and waits for a signature update device. With the image profile `online`, signature sets are also downloaded from a published folder. See [docs/image.md](docs/image.md):
 
 ```sh
 image/build.sh --profile test   # build the test image (Docker only)
@@ -241,7 +241,7 @@ See [docs/signatures.md](docs/signatures.md).
 - [x] Offline updates from a signed USB device, for air-gapped kiosks
 - [x] Publication: `usb-pasteur-signatures publish` downloads the sources (ClamAV, YARA Forge, MalwareBazaar, Hashlookup) with a cache, checks the set with the kiosk engines, then signs it; container `publish/`
 - [ ] Release signing key of the project, its storage (hardware token) and the publication schedule
-- [ ] Online updates through a dedicated channel (proxy, domain allowlist)
+- [x] Online updates through a dedicated channel: image profile `online`, update service as the only user allowed out by the firewall, HTTP(S) and proxy, only the changed files downloaded, new set loaded when the kiosk is idle
 
 ### Testing in a virtual machine
 

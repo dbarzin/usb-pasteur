@@ -13,6 +13,14 @@ from usb_pasteur.device import UsbDevice
 class Action(StrEnum):
     ADD = "add"
     REMOVE = "remove"
+    # No device event for a while: the kiosk may do its background work
+    IDLE = "idle"
+
+
+# Device of the IDLE events
+NO_DEVICE = UsbDevice(node="")
+# Seconds without device event before an IDLE event
+IDLE_INTERVAL = 5.0
 
 
 @dataclass(frozen=True)
@@ -23,7 +31,10 @@ class DeviceEvent:
 
 class DeviceSource(Protocol):
     def wait_event(self) -> DeviceEvent | None:
-        """Block until a USB filesystem is added or removed (None: stop)."""
+        """Block until a USB filesystem is added or removed (None: stop).
+
+        Sources may also return IDLE events when nothing happens.
+        """
         ...
 
 
@@ -65,8 +76,10 @@ class UdevSource:
         self._filter = UsbFilesystemFilter()
 
     def wait_event(self) -> DeviceEvent | None:
-        for dev in iter(self._monitor.poll, None):
+        while True:
+            dev = self._monitor.poll(timeout=IDLE_INTERVAL)
+            if dev is None:
+                return DeviceEvent(Action.IDLE, NO_DEVICE)
             event = self._filter.event(dev.action, dev.device_node, dev)
             if event is not None:
                 return event
-        return None

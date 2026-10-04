@@ -181,6 +181,20 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class UpdatesConfig:
+    # Online signature updates (usb-pasteur-update.service, image profile
+    # "online"): off by default, a kiosk works offline
+    enabled: bool = False
+    # Folder of a published signature set (manifest.json, its signature and
+    # the files): HTTPS recommended, HTTP accepted (the set is signed)
+    url: str = ""
+    # HTTP(S) proxy, e.g. http://proxy.example.org:3128 ("": direct)
+    proxy: str = ""
+    # Timeout of each request, in seconds
+    timeout: float = 300.0
+
+
+@dataclass(frozen=True)
 class Config:
     kiosk: KioskConfig = field(default_factory=KioskConfig)
     device: DeviceConfig = field(default_factory=DeviceConfig)
@@ -192,6 +206,7 @@ class Config:
     report: ReportConfig = field(default_factory=ReportConfig)
     quarantine: QuarantineConfig = field(default_factory=QuarantineConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    updates: UpdatesConfig = field(default_factory=UpdatesConfig)
 
 
 def load_config(path: Path) -> Config:
@@ -350,7 +365,24 @@ def parse_config(data: dict[str, Any]) -> Config:
         report=report_cfg,
         quarantine=quarantine_cfg,
         logging=logging_cfg,
+        updates=_parse_updates(data.get("updates", {})),
     )
+
+
+def _parse_updates(updates: dict[str, Any]) -> UpdatesConfig:
+    _reject_unknown(updates, {"enabled", "url", "proxy", "timeout"}, "updates")
+    config = UpdatesConfig(
+        enabled=_get(updates, "updates", "enabled", bool, False),
+        url=_get(updates, "updates", "url", str, ""),
+        proxy=_get(updates, "updates", "proxy", str, ""),
+        timeout=_positive(updates, "updates", "timeout", UpdatesConfig.timeout),
+    )
+    for key, value in (("url", config.url), ("proxy", config.proxy)):
+        if value and not value.startswith(("https://", "http://")):
+            raise ConfigError(f"updates.{key} must be an http:// or https:// URL")
+    if config.enabled and not config.url:
+        raise ConfigError("updates.url is required when updates are enabled")
+    return config
 
 
 def _parse_engines(engines: dict[str, Any]) -> EnginesConfig:

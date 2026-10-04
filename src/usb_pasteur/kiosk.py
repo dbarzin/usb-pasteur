@@ -35,6 +35,7 @@ from usb_pasteur.sigsets import (
     NotNewerError,
     SignatureSetError,
     current_path,
+    current_set,
     install,
     installed_manifest,
     trusted_keys,
@@ -140,7 +141,8 @@ def restart_clamd() -> None:
         return
     try:
         subprocess.run(  # noqa: S603  (fixed command, no shell)
-            [SYSTEMCTL, "try-restart", CLAMD_SERVICE],
+            # Never an authentication prompt (polkit) for a user without the right
+            [SYSTEMCTL, "--no-ask-password", "try-restart", CLAMD_SERVICE],
             check=True,
             capture_output=True,
             timeout=120,
@@ -218,6 +220,10 @@ class Kiosk:
         """
         self.config = config
         self.signatures_error = signatures_error
+        # The signature set loaded by the engines: an online update installs a
+        # new one, loaded when the kiosk is idle
+        self.loaded_set = current_set(config.signatures.folder)
+        self.loaded_manifest = installed_manifest(config.signatures.folder)
         self.display = display
         self.source = source
         self.scanner = Scanner(pool, config.limits)
@@ -293,6 +299,9 @@ class Kiosk:
         event = self.source.wait_event()
         if event is None:
             return State.STOP
+        if event.action is Action.IDLE:
+            self._load_new_set()
+            return State.WAIT
         if event.action is Action.REMOVE:
             log_event(logger, "device_removed", node=event.device.node)
             self.device = None
@@ -363,8 +372,28 @@ class Kiosk:
         self.display.message(f"Signatures updated: set {manifest.serial}")
         self._reload_engines(before, manifest)
 
+    def _load_new_set(self) -> None:
+        """Load a signature set installed meanwhile (online update)."""
+        folder = self.config.signatures.folder
+        current = current_set(folder)
+        after = installed_manifest(folder)
+        if current == self.loaded_set or after is None:
+            return
+        log_event(
+            logger,
+            "signatures_changed",
+            serial=after.serial,
+            previous=None if self.loaded_manifest is None else self.loaded_manifest.serial,
+        )
+        self.display.message(f"New signatures installed: set {after.serial}")
+        self._reload_engines(self.loaded_manifest, after)
+
     def _reload_engines(self, before: Manifest | None, after: Manifest) -> None:
-        if self.config.engines.clamav.enabled and _changed(before, after, "clamav/"):
+        self.loaded_set = current_set(self.config.signatures.folder)
+        self.loaded_manifest = after
+        # In FAKE_SCAN mode, clamd is not used
+        clamav = self.config.engines.clamav.enabled and not self.config.kiosk.fake_scan
+        if clamav and _changed(before, after, "clamav/"):
             restart_clamd()
         pool = self.scanner.pool
         pool.stop()

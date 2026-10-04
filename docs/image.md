@@ -209,16 +209,28 @@ Runtime dependencies are pinned with their hashes in `image/requirements.txt`.
 After a change of the dependencies in `pyproject.toml`, regenerate it with
 `image/lock-requirements.sh`.
 
+## Profile online
+
+`--profile online` adds online signature updates (see
+[signatures.md](signatures.md#online-updates)): systemd-networkd (DHCP on the
+wired network), systemd-resolved, the `usb-pasteur-update` timer and a
+firewall that only lets the update service out
+(`image/mkosi.profiles/online/`). Without it, the image has no network
+configuration at all. The configuration of the kiosk must also enable the
+updates (`[updates]`).
+
 ## Test profile
 
 `--profile test` builds `usb-pasteur-test.raw`, for the virtual machine tests
-only, never for a kiosk:
+only, never for a kiosk. It includes the profile `online`, and adds:
 
 - a test-only signature set, generated from `image/vm/corpus.py`, signed
   with the development update key and installed (serial 1): a ClamAV
   database that detects the EICAR test file, a MalwareBazaar database, a
   Hashlookup filter and a YARA rule, each detecting one file of the test key;
-- the matching configuration, with every engine enabled;
+- the matching configuration, with every engine enabled, and online updates
+  from `http://10.0.2.2:8080/` (the build container, seen from the QEMU user
+  network);
 - a root shell without password on the virtio console (`hvc0`), and kernel
   messages on the serial port;
 - `kiosk-screen`, which prints the text of the kiosk screen in that shell.
@@ -254,12 +266,15 @@ the virtio console:
 8. the cleaned key is inserted again and reported clean; a signature update
    key with a newer set (serial 2) is installed, the engines are reloaded and
    the new sample it detects is found; a modified set, a set signed with
-   another key and an older set are refused; an emulated USB
+   another key and an older set are refused; a newer set published on an HTTP
+   server by the test is downloaded by the update service (only its changed
+   file), installed and loaded by the idle kiosk, and only the update service
+   user can open a network connection; an emulated USB
    keyboard and network adapter are blocked by USBGuard (no input device, no
    network interface) and the excluded drivers are not in the image; the
    kernel settings, the firewall and the service sandboxes are in place;
 9. after a reboot, the scan reports are still there, the root filesystem is
-   unchanged and the signature set 2 is verified at start.
+   unchanged and the signature set 5 is verified at start.
 
 Two more machines boot the same image:
 

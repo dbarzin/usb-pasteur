@@ -13,13 +13,16 @@ trusting another key refuses the image. Run it with image/vm.sh test.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from usb_pasteur import sigsets
 
 UPDATE_KEY = Path("image/update.key")
+# Published for the online update test: http://10.0.2.2:8080/ in the machine
+PUBLISH_PORT = 8080
+PUBLISHED = "usb-pasteur-signatures"
 
 LOG = "/var/log/usb-pasteur/usb-pasteur.log"
 # Discoverable Partitions Specification: root partition of x86-64
@@ -242,6 +248,7 @@ def check_usb_policy(vm: Machine) -> None:
     for module in ("usbnet", "cdc_ether", "rndis_host", "btusb", "cfg80211", "usbserial"):
         check(not vm.shell.succeeds(f"modinfo {module}"), f"kernel module {module} is present")
     check(vm.shell.succeeds("modinfo usb-storage"), "kernel module usb-storage is missing")
+    interfaces = vm.shell.run("ls /sys/class/net").split()
 
     for driver, product in (("usb-kbd", "Keyboard"), ("usb-net", "Network")):
         vm.add_usb_device(driver, driver)
@@ -261,14 +268,12 @@ def check_usb_policy(vm: Machine) -> None:
 
     inputs = vm.shell.run("grep -i 'qemu.*keyboard' /proc/bus/input/devices || true").strip()
     check(not inputs, f"input device created for the keyboard: {inputs}")
-    interfaces = vm.shell.run("ls /sys/class/net").split()
-    check(interfaces == ["lo"], f"network interfaces: {interfaces}")
+    after = vm.shell.run("ls /sys/class/net").split()
+    check(after == interfaces, f"network interfaces: {interfaces}, then {after}")
     audit = vm.shell.run(
         "grep -c 'result=.SUCCESS.*target.new=.block' /var/log/usbguard/usbguard-audit.log || true"
     ).strip()
-    print(
-        f"no input device, no network interface, {audit} devices blocked in the USBGuard audit log"
-    )
+    print(f"no input device, no new network interface, {audit} devices blocked by USBGuard")
 
 
 SYSCTL = {
@@ -348,6 +353,13 @@ def check_hardening(vm: Machine) -> None:
     )
     print("sysctl, kernel options, lockdown, firewall, no login console: OK")
     units = [" ".join(line.split()[:2]) for line in exposure.splitlines()]
+    # A oneshot service is not in the overview once it has run
+    update = (
+        vm.shell.run("systemd-analyze security --no-pager usb-pasteur-update.service | tail -n 1")
+        .split(": ")[-1]
+        .split()
+    )
+    units.append(f"usb-pasteur-update.service {update[0] if update else '?'}")
     print("systemd exposure (0 to 10):", ", ".join(units))
 
 
@@ -361,12 +373,12 @@ def check_reboot(vm: Machine, timeout: float) -> None:
     vm.reboot(timeout)
     started = wait_event(vm, "kiosk_started", occurrence=2, timeout=timeout)
     check(started["ready"], "the kiosk cannot scan after a reboot")
-    check(started["signature_set"] == 2, f"signature set after a reboot: {started}")
+    check(started["signature_set"] == 5, f"signature set after a reboot: {started}")
     check(count_reports(vm) == reports, "scan reports lost after a reboot")
     check(not vm.shell.succeeds("test -e /usr/test"), "the root filesystem changed")
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
     check(not failed, f"failed units:\n{failed}")
-    print(f"{reports} scan reports kept, signature set 2 verified at start")
+    print(f"{reports} scan reports kept, signature set 5 verified at start")
 
 
 def count_events(vm: Machine, name: str) -> int:
@@ -451,6 +463,68 @@ def check_signature_update(vm: Machine, workdir: Path) -> None:
     current = vm.shell.run("readlink /var/lib/usb-pasteur-signatures/current").strip()
     check(current == "sets/2", f"installed set: {current}")
     print("refused: modified set, set signed by another key, older set")
+
+
+class Publisher:
+    """HTTP server publishing signature sets for the machine; it records the requests."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.requests: list[str] = []
+        publisher = self
+
+        class Handler(SimpleHTTPRequestHandler):
+            def do_GET(self) -> None:
+                publisher.requests.append(self.path)
+                super().do_GET()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        root.mkdir(parents=True, exist_ok=True)
+        self.httpd = ThreadingHTTPServer(
+            ("127.0.0.1", PUBLISH_PORT), functools.partial(Handler, directory=str(root))
+        )
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def stop(self) -> None:
+        self.httpd.shutdown()
+
+
+def check_online_update(vm: Machine, workdir: Path) -> None:
+    step("online signature update")
+    publisher = Publisher(workdir / "www")
+    try:
+        # A newer set than the installed one (2): only its MalwareBazaar
+        # database changed
+        folder = publisher.root / PUBLISHED
+        corpus.write_signatures(folder, (corpus.NEW_SAMPLE, b"published online"))
+        sigsets.build(folder, 5)
+        sigsets.sign(folder, UPDATE_KEY)
+        before = count_events(vm, "engines_reloaded")
+        output = vm.shell.run("systemctl start usb-pasteur-update.service", timeout=300)
+        changed = wait_event(vm, "signatures_changed")
+        check(changed["serial"] == 5, f"online set: {changed}")
+        wait_next_event(vm, "engines_reloaded", before)
+        files = sorted(p for p in publisher.requests if not p.endswith(("manifest.json", ".sig")))
+        check(files == [f"/{PUBLISHED}/{corpus.MALWAREBAZAAR_DB}"], f"downloaded: {files}")
+        current = vm.shell.run("readlink /var/lib/usb-pasteur-signatures/current").strip()
+        check(current == "sets/5", f"installed set: {current}, {output}")
+        print("set 5 downloaded (only the changed file), installed, loaded by the idle kiosk")
+
+        # Only the update service may go out
+        connect = (
+            "python3 -c 'import socket; socket.create_connection"
+            f'(("10.0.2.2", {PUBLISH_PORT}), timeout=5)\''
+        )
+        check(not vm.shell.succeeds(connect), "the kiosk (root) can open a connection")
+        check(
+            vm.shell.succeeds(f"setpriv --reuid=usb-pasteur-update --init-groups {connect}"),
+            "the update service user cannot open a connection",
+        )
+        print("firewall: only the update service user can open a connection")
+    finally:
+        publisher.stop()
 
 
 def check_infected_key(vm: Machine, key: Path) -> None:
@@ -557,6 +631,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
                 check_signature_update(vm, workdir)
+                check_online_update(vm, workdir)
                 check_usb_policy(vm)
                 check_hardening(vm)
                 check_reboot(vm, args.boot_timeout)

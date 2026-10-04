@@ -173,6 +173,19 @@ verify = true
 # folder at its root (such a device is not scanned)
 update_from_devices = true
 
+[updates]
+# Online signature updates (docs/signatures.md): off by default, a kiosk works
+# offline. They also need the image profile "online" (network, firewall, and
+# the usb-pasteur-update timer, every 6 hours).
+enabled = false
+# Folder of a published signature set (manifest.json, its signature and the
+# files). The set is signed: HTTPS is recommended, HTTP is accepted.
+url = ""
+# HTTP(S) proxy, e.g. "http://proxy.example.org:3128" ("": direct)
+proxy = ""
+# Timeout of each request, in seconds
+timeout = 300.0
+
 [report]
 # JSON scan reports, one per scanned device
 folder = "/var/lib/usb-pasteur/reports"

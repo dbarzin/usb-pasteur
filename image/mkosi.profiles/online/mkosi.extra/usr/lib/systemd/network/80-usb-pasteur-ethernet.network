@@ -1,0 +1,11 @@
+# Wired network of an online kiosk: IPv4 address and DNS servers by DHCP
+[Match]
+Type=ether
+Kind=!*
+
+[Network]
+DHCP=ipv4
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+LLMNR=no
+MulticastDNS=no

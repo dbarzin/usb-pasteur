@@ -10,7 +10,7 @@ import pytest
 from usb_pasteur.config import Config, parse_config
 from usb_pasteur.device import UsbDevice
 from usb_pasteur.engines.fake import EICAR
-from usb_pasteur.kiosk import Kiosk, build_pool, check_signatures
+from usb_pasteur.kiosk import Kiosk, build_pool, check_signatures, restart_clamd
 from usb_pasteur.monitor import Action, DeviceEvent
 from usb_pasteur.sigsets import UPDATE_FOLDER, SignatureSetError, install, installed_manifest
 
@@ -171,3 +171,32 @@ def test_check_signatures(config: Config, tmp_path: Path, key: Path) -> None:
     (config.signatures.folder / "current/yara/a.yar").write_bytes(b"rule changed")
     with pytest.raises(SignatureSetError, match="modified"):
         check_signatures(signed)
+
+
+def test_clamd_is_not_restarted_in_fake_scan_mode(
+    config: Config,
+    display: RecordingDisplay,
+    tmp_path: Path,
+    key: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The test set has ClamAV files: no restart of a clamd the kiosk does not use."""
+    restarts: list[bool] = []
+    monkeypatch.setattr("usb_pasteur.kiosk.restart_clamd", lambda: restarts.append(True))
+    run(config, display, {KEY_A: update_key(tmp_path, "update", 1, key)})
+    assert "Signatures updated: set 1" in display.messages
+    assert restarts == []
+
+
+def test_restart_clamd_never_asks_for_a_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        "usb_pasteur.kiosk.subprocess.run",
+        lambda argv, **kwargs: commands.append(list(argv)),
+    )
+    monkeypatch.setattr("usb_pasteur.kiosk.Path.is_dir", lambda self: True)
+    monkeypatch.setattr("usb_pasteur.kiosk.Path.exists", lambda self: True)
+    restart_clamd()
+    assert commands == [
+        ["/usr/bin/systemctl", "--no-ask-password", "try-restart", "clamav-daemon.service"]
+    ]

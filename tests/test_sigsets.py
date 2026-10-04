@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -197,3 +198,19 @@ def test_command_line(tmp_path: Path, key: Path, capsys: pytest.CaptureFixture[s
     assert main(["install", str(source), "--keys", str(key.parent), "--target", str(target)]) == 0
     assert main(["install", str(source), "--keys", str(key.parent), "--target", str(target)]) == 1
     assert "not newer" in capsys.readouterr().err
+
+
+def test_install_modes_do_not_depend_on_the_umask(
+    tmp_path: Path, key: Path, keys: list[Path]
+) -> None:
+    """clamd and the scan workers read the set: the update service has umask 077."""
+    source = make_set(tmp_path / "set", FILES, 1, key)
+    old = os.umask(0o077)
+    try:
+        install(source, tmp_path / "installed", keys)
+    finally:
+        os.umask(old)
+    current = tmp_path / "installed/current"
+    for path in [current, *current.rglob("*")]:
+        expected = 0o755 if path.is_dir() else 0o644
+        assert path.stat().st_mode & 0o777 == expected, path

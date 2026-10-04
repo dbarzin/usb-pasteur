@@ -352,7 +352,9 @@ def install(source: Path, folder: Path, keys: Sequence[Path]) -> Manifest:
     final = sets / str(manifest.serial)
     staging = sets / f".staging-{manifest.serial}"
     shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(mode=0o755)
+    # Explicit modes: readable by clamd and the scan workers whatever the umask
+    staging.mkdir()
+    staging.chmod(0o755)
     try:
         if shutil.disk_usage(sets).free < manifest.total_size:
             raise SignatureSetError("not enough free space for the signature set")
@@ -360,7 +362,9 @@ def install(source: Path, folder: Path, keys: Sequence[Path]) -> Manifest:
             for entry in manifest.files:
                 target = staging / entry.path
                 for parent in reversed(target.relative_to(staging).parents[:-1]):
-                    (staging / parent).mkdir(mode=0o755, exist_ok=True)
+                    if not (staging / parent).is_dir():
+                        (staging / parent).mkdir()
+                        (staging / parent).chmod(0o755)
                 old = None if installed is None else installed.entry(entry.path)
                 if (
                     old is not None
@@ -375,8 +379,9 @@ def install(source: Path, folder: Path, keys: Sequence[Path]) -> Manifest:
                         _copy_verified(fd, entry, target)
                 except OSError as ex:
                     raise SignatureSetError(f"cannot read {entry.path}: {ex.strerror}") from ex
-        (staging / MANIFEST).write_bytes(data)
-        (staging / SIGNATURE).write_bytes(signature)
+        for name, content in ((MANIFEST, data), (SIGNATURE, signature)):
+            (staging / name).write_bytes(content)
+            (staging / name).chmod(0o644)
         shutil.rmtree(final, ignore_errors=True)
         staging.rename(final)
     except BaseException:
@@ -475,9 +480,26 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--keys", type=Path, default=Path("/usr/share/usb-pasteur/keys"))
         if name == "install":
             p.add_argument("--target", type=Path, default=Path("/var/lib/usb-pasteur-signatures"))
+            p.add_argument(
+                "--staged",
+                action="store_true",
+                help="a set staged by download: nothing staged or not newer is not an error,"
+                " and the staged files are removed",
+            )
+    p_download = sub.add_parser(
+        "download", help="download the published set (updates.url) when it is newer"
+    )
+    p_download.add_argument("--staging", type=Path, required=True)
+    p_download.add_argument(
+        "--config", type=Path, default=Path("/etc/usb-pasteur/usb-pasteur.toml")
+    )
     args = parser.parse_args(argv)
     if args.command == "publish":
         return _publish(args)
+    if args.command == "download":
+        return _download(args)
+    if args.command == "install" and args.staged:
+        return _install_staged(args)
     try:
         if args.command == "build":
             manifest = build(args.folder, args.serial)
@@ -501,6 +523,41 @@ def main(argv: list[str] | None = None) -> int:
         print(f"usb-pasteur-signatures: {ex}", file=sys.stderr)
         return 1
     return 0
+
+
+def _download(args: argparse.Namespace) -> int:
+    from usb_pasteur.config import ConfigError, load_config
+    from usb_pasteur.online import UpdateError, download
+
+    try:
+        manifest = download(load_config(args.config), args.staging)
+    except (ConfigError, UpdateError, OSError) as ex:
+        print(f"usb-pasteur-signatures: {ex}", file=sys.stderr)
+        return 1
+    if manifest is not None:
+        print(f"set {manifest.serial} staged in {args.staging}")
+    return 0
+
+
+def _install_staged(args: argparse.Namespace) -> int:
+    if not (args.folder / MANIFEST).exists():
+        print("no signature set staged")
+        return 0
+    status = 0
+    try:
+        manifest = install(args.folder, args.target, trusted_keys(args.keys))
+        print(f"serial {manifest.serial} installed in {args.target}")
+    except NotNewerError as ex:
+        print(f"not installed: {ex}")
+    except (SignatureSetError, OSError) as ex:
+        print(f"usb-pasteur-signatures: {ex}", file=sys.stderr)
+        status = 1
+    for path in args.folder.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    return status
 
 
 def _publish(args: argparse.Namespace) -> int:

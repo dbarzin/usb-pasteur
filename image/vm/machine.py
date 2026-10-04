@@ -107,7 +107,9 @@ def qemu_argv(
         # Empty USB 3 controller: keys are inserted while the machine runs
         "-device", "qemu-xhci,id=xhci",
         "-device", "virtio-serial-pci",
-        "-nic", "none",
+        # QEMU user network: DHCP, and the host (the build container) as
+        # 10.0.2.2, where the test publishes signature sets
+        "-nic", "user,model=virtio-net-pci",
         "-qmp", f"unix:{workdir / 'qmp.sock'},server=on,wait=off",
     ]  # fmt: skip
     if interactive:

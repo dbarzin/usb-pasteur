@@ -2,6 +2,8 @@
 # (90-systemd.preset), which "systemctl preset-all" applies at build time.
 
 enable usb-pasteur.service
+# Online signature updates: enabled by the image profile "online"
+disable usb-pasteur-update.timer
 # clamd is started by its socket: without a signature set, it cannot start
 enable clamav-daemon.socket
 disable clamav-daemon.service

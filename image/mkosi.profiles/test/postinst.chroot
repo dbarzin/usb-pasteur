@@ -28,4 +28,10 @@ rules = [{ name = "vm-test", path = "/var/lib/usb-pasteur-signatures/current/yar
 
 [logging]
 level = "DEBUG"
+
+# Published by the virtual machine test (image/vm/run_tests.py) on the host
+# of the QEMU user network
+[updates]
+enabled = true
+url = "http://10.0.2.2:8080/usb-pasteur-signatures/"
 CONFIG
