@@ -232,8 +232,8 @@ Tasks:
 - [x] Hardened systemd services (`ProtectSystem`, `NoNewPrivileges`, seccomp filters; `PrivateNetwork` and `MemoryDenyWriteExecute` for clamd), exposure measured by `systemd-analyze security` in the virtual machine test
 - [x] Each scan worker runs in a `bubblewrap` sandbox, without network, under a dedicated user without capabilities, with a system call filter; the kiosk opens the files and passes their descriptors, and only accepts validated JSON from the workers
 - [ ] One worker per engine, so that a compromised engine cannot forge the results of another one
-- [ ] Audit log (`auditd`) for sensitive operations
-- [ ] Assessment with `lynis` and the ANSSI configuration recommendations for GNU/Linux systems
+- [x] Audit log (`auditd`) for sensitive operations
+- [x] Assessment with `lynis` and the ANSSI configuration recommendations for GNU/Linux systems
 
 ### Signature updates
 

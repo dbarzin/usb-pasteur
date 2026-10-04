@@ -10,6 +10,8 @@ disable clamav-daemon.service
 enable logrotate.timer
 enable usbguard.service
 enable nftables.service
+enable auditd.service
+enable audit-rules.service
 
 # No network: signature updates come through a dedicated channel (phase 2)
 disable clamav-freshclam.service

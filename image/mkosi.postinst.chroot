@@ -46,5 +46,9 @@ clamd_option StreamMaxLength 100M
 rm -f /etc/usbguard/IPCAccessControl.d/*
 chmod 0600 /etc/usbguard/rules.conf /etc/usbguard/usbguard-daemon.conf
 
+# The audit rules of mkosi.extra replace those of the package
+rm -f /etc/audit/rules.d/audit.rules
+chmod 0640 /etc/audit/audit.rules
+
 # A keyboard cannot reboot the kiosk (Ctrl-Alt-Del)
 systemctl mask ctrl-alt-del.target

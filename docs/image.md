@@ -173,6 +173,23 @@ After the ANSSI configuration recommendations for GNU/Linux systems:
   cannot have `MemoryDenyWriteExecute` or `RestrictSUIDSGID`: the first one
   would also apply to the YARA-X workers, which compile rules to native
   code, the second one refuses a system call bubblewrap needs.
+- **Kernel modules removed**: network protocols the kiosk never uses (DCCP,
+  SCTP, RDS, TIPC) and FireWire, another way to reach the memory of the
+  kiosk, besides the USB network, Bluetooth and Wi-Fi drivers. The protocols
+  and FireWire are also listed in `/etc/modprobe.d/usb-pasteur.conf`, where
+  the auditing tools look for them.
+- **Audit log** (`/etc/audit/audit.rules`, auditd): loading of kernel modules,
+  mounts (except those of systemd and bubblewrap), every program started,
+  ptrace, changes of the clock, of the signature sets and of the staged image
+  updates. The rules are locked (`-e 2`): changing them needs a reboot. They
+  are loaded by `auditctl -R` (`augenrules` writes into `/etc`, read-only).
+  The log is in `/var/log/audit/audit.log`, for instance
+  `ausearch -k signatures -i`.
+
+The test profile includes `lynis`, run by the automated test: hardening index
+73, no warnings. Its remaining suggestions do not apply to a kiosk without
+login (password policy, banners, package tools, fail2ban) or come later
+(remote logging, phase 5).
 
 ## Scan worker sandbox
 

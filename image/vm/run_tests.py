@@ -249,7 +249,10 @@ def check_usb_policy(vm: Machine) -> None:
     authorized_default = vm.shell.run("cat /sys/module/usbcore/parameters/authorized_default")
     check(authorized_default.strip() == "0", f"usbcore.authorized_default: {authorized_default}")
     check(vm.shell.succeeds("systemctl is-active usbguard"), "usbguard is not running")
-    for module in ("usbnet", "cdc_ether", "rndis_host", "btusb", "cfg80211", "usbserial"):
+    for module in (
+        "usbnet", "cdc_ether", "rndis_host", "btusb", "cfg80211", "usbserial",
+        "dccp", "sctp", "rds", "tipc", "firewire_core",
+    ):  # fmt: skip
         check(not vm.shell.succeeds(f"modinfo {module}"), f"kernel module {module} is present")
     check(vm.shell.succeeds("modinfo usb-storage"), "kernel module usb-storage is missing")
     interfaces = vm.shell.run("ls /sys/class/net").split()
@@ -365,6 +368,34 @@ def check_hardening(vm: Machine) -> None:
     )
     units.append(f"usb-pasteur-update.service {update[0] if update else '?'}")
     print("systemd exposure (0 to 10):", ", ".join(units))
+
+
+def check_audit(vm: Machine) -> None:
+    step("audit log")
+    status = vm.shell.run("auditctl -s")
+    check("enabled 2" in status, f"audit rules not locked: {status}")
+    rules = len(vm.shell.run("auditctl -l").splitlines())
+    check(rules > 10, f"{rules} audit rules")
+    # Events of the scenario so far: key mounts, programs, signature sets, modules
+    found = {}
+    for key in ("mount", "exec", "signatures", "modules"):
+        events = vm.shell.run(f"ausearch -k {key} -i 2>/dev/null | grep -c '^type=SYSCALL' || true")
+        found[key] = int(events.strip() or 0)
+        check(found[key] > 0, f"no audit event {key}")
+    print(f"auditd: {rules} rules, locked; events: {found}")
+
+
+def run_lynis(vm: Machine) -> None:
+    step("lynis assessment (information)")
+    output = vm.shell.run(
+        "lynis audit system --quick --no-colors --report-file /tmp/lynis.dat 2>&1"
+        " | grep 'Hardening index'; grep '^warning\\[\\]=' /tmp/lynis.dat;"
+        " echo suggestions: $(grep -c '^suggestion' /tmp/lynis.dat);"
+        " grep '^suggestion' /tmp/lynis.dat | cut -d'|' -f1,2 || true",
+        timeout=900,
+    )
+    for line in output.splitlines():
+        print(line.strip().replace("warning[]=", "warning: "))
 
 
 def count_reports(vm: Machine) -> int:
@@ -737,6 +768,8 @@ def main(argv: list[str] | None = None) -> int:
                 check_online_update(vm, workdir)
                 check_usb_policy(vm)
                 check_hardening(vm)
+                check_audit(vm)
+                run_lynis(vm)
                 check_reboot(vm, args.boot_timeout)
                 check_image_update(vm, workdir, args.boot_timeout)
             current = workdir / "modified-root"
