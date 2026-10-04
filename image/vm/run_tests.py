@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import corpus
+import keys
 from machine import SIGNING_CERTIFICATE, Machine, MachineError, make_key, read_key
 
 # The kiosk code builds and signs the signature sets of the update test
@@ -405,8 +406,9 @@ def count_reports(vm: Machine) -> int:
 def check_reboot(vm: Machine, timeout: float) -> None:
     step("reboot: the data is kept, the system is unchanged")
     reports = count_reports(vm)
+    before = count_events(vm, "kiosk_started")
     vm.reboot(timeout)
-    started = wait_event(vm, "kiosk_started", occurrence=2, timeout=timeout)
+    started = wait_next_event(vm, "kiosk_started", before, timeout=timeout)
     check(started["ready"], "the kiosk cannot scan after a reboot")
     check(started["signature_set"] == 5, f"signature set after a reboot: {started}")
     check(count_reports(vm) == reports, "scan reports lost after a reboot")
@@ -719,6 +721,92 @@ def check_infected_key(vm: Machine, key: Path) -> None:
     print(f"files left on the key: {', '.join(remaining)}")
 
 
+def scan_and_clean(vm: Machine, name: str, image: Path) -> None:
+    """Insert a key holding the corpus: clean it, then it is reported clean."""
+    names = ("device_inserted", "infected_files", "device_cleaned", "device_ejected",
+             "device_verdict", "device_removed")  # fmt: skip
+    before = {event: count_events(vm, event) for event in names}
+    vm.insert_key(image)
+    inserted = wait_next_event(vm, "device_inserted", before["device_inserted"])
+    infected = wait_next_event(vm, "infected_files", before["infected_files"])
+    expected = sorted(path for path, (_, engine) in corpus.KEY.items() if engine)
+    check(infected["count"] == len(expected), f"{name}: infected files: {infected['count']}")
+    cleaned = wait_next_event(
+        vm, "device_cleaned", before["device_cleaned"], action=vm.press_key, timeout=60
+    )
+    check(cleaned["removed"] == len(expected), f"{name}: removed files: {cleaned['removed']}")
+    wait_next_event(vm, "device_ejected", before["device_ejected"])
+    vm.remove_key()
+    wait_next_event(vm, "device_removed", before["device_removed"])
+
+    vm.insert_key(image)
+    verdict = wait_next_event(vm, "device_verdict", before["device_verdict"] + 1)
+    check(verdict["verdict"] == "clean", f"{name}: verdict after cleaning: {verdict}")
+    files = sorted(f["path"] for f in last_report(vm)["files"])
+    clean = sorted(path for path, (_, engine) in corpus.KEY.items() if not engine)
+    check(files == clean, f"{name}: files after cleaning: {files}")
+    wait_next_event(vm, "device_ejected", before["device_ejected"] + 1)
+    vm.remove_key()
+    wait_next_event(vm, "device_removed", before["device_removed"] + 1)
+    print(
+        f"{name}: {inserted['fs_type']} on {inserted['node']}, "
+        f"{len(expected)} infected files removed, then reported clean"
+    )
+
+
+def check_filesystem_keys(vm: Machine, workdir: Path) -> None:
+    step("keys of the other filesystems: exfat, NTFS, ext4, partitioned")
+    images = {}
+    for name, build in keys.CORPUS_KEYS.items():
+        images[name] = workdir / f"{name}.img"
+        build(images[name])
+    # exfat and NTFS are filled by the kernel of the machine, the kiosk stopped
+    started = count_events(vm, "kiosk_started")
+    vm.shell.run("systemctl stop usb-pasteur", timeout=120)
+    for fs_type in keys.FILLED_IN_MACHINE:
+        keys.fill_in_machine(vm, images[fs_type], fs_type)
+    vm.shell.run("systemctl start usb-pasteur", timeout=300)
+    wait_next_event(vm, "kiosk_started", started, timeout=300)
+    wait_screen(vm, "Ready. Insert a USB device.")
+    for name, image in images.items():
+        scan_and_clean(vm, name, image)
+
+
+def check_refused_keys(vm: Machine, workdir: Path) -> None:
+    step("unsupported and corrupted filesystems")
+    for name, build, error in (
+        ("unsupported", keys.unsupported_key, "filesystem not allowed: erofs"),
+        ("corrupted-ext4", keys.corrupted_ext4_key, "mount"),
+    ):
+        image = workdir / f"{name}.img"
+        build(image)
+        before = {event: count_events(vm, event) for event in ("mount_failed", "device_removed")}
+        vm.insert_key(image)
+        failed = wait_next_event(vm, "mount_failed", before["mount_failed"])
+        check(error in failed["error"], f"{name}: {failed}")
+        wait_screen(vm, "Error: please remove the device.")
+        vm.remove_key()
+        wait_next_event(vm, "device_removed", before["device_removed"])
+        print(f"{name}: refused, {failed['error'].splitlines()[0]}")
+
+    # Mounted, but a file cannot be read: the key is not verified
+    image = workdir / "corrupted-vfat.img"
+    keys.corrupted_vfat_key(image)
+    before = {event: count_events(vm, event) for event in ("device_verdict", "device_removed")}
+    vm.insert_key(image)
+    verdict = wait_next_event(vm, "device_verdict", before["device_verdict"])
+    check(
+        verdict["verdict"] == "not_verified" and not verdict["complete"],
+        f"corrupted-vfat: verdict {verdict}",
+    )
+    wait_screen(vm, "DEVICE NOT VERIFIED: do not use it. Remove the device.")
+    report = last_report(vm)
+    check(keys.UNREADABLE in json.dumps(report), f"corrupted-vfat: {keys.UNREADABLE} not reported")
+    vm.remove_key()
+    wait_next_event(vm, "device_removed", before["device_removed"])
+    print(f"corrupted-vfat: not verified, {keys.UNREADABLE} unreadable")
+
+
 def check_clean_key(vm: Machine, key: Path) -> None:
     step("insert the cleaned key again")
     vm.insert_key(key)
@@ -764,6 +852,8 @@ def main(argv: list[str] | None = None) -> int:
                 check_filesystems(vm)
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
+                check_filesystem_keys(vm, workdir)
+                check_refused_keys(vm, workdir)
                 check_signature_update(vm, workdir)
                 check_online_update(vm, workdir)
                 check_usb_policy(vm)

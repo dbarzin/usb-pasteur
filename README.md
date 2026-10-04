@@ -257,7 +257,7 @@ Tasks:
 - [x] Read-only root filesystem, data partition grown to fill the disk, data kept after a reboot
 - [x] OVMF with the image signing keys enrolled: Secure Boot enabled, kernel lockdown, root filesystem on dm-verity; a modified root block cannot be read; firmware trusting another key refuses the image
 - [ ] Software TPM (`swtpm`), once measured boot is used
-- [ ] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4; only vfat for now), plus partitioned, unsupported and corrupted filesystems
+- [x] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4), plus partitioned, unsupported and corrupted filesystems
 - [x] An emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard: no input device, no network interface
 - [ ] No outgoing network outside the update channel
 - [x] A/B update and rollback tested in the virtual machine

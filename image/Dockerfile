@@ -7,7 +7,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         mkosi systemd-container systemd-ukify systemd-boot-efi systemd-repart \
         apt debian-archive-keyring dpkg-dev \
-        dosfstools e2fsprogs erofs-utils exfatprogs mtools cpio zstd \
+        dosfstools e2fsprogs erofs-utils exfatprogs ntfs-3g mtools cpio zstd \
         python3 python3-venv python3-pip git ca-certificates \
         qemu-system-x86 qemu-utils ovmf swtpm swtpm-tools \
         openssl sbsigntool python3-virt-firmware \

@@ -342,19 +342,30 @@ the virtio console:
    infected files are quarantined (checked against their SHA-256) and
    removed from the key, which is ejected;
 7. the key is removed: only the clean files are left on it;
-8. the cleaned key is inserted again and reported clean; a signature update
-   key with a newer set (serial 2) is installed, the engines are reloaded and
-   the new sample it detects is found; a modified set, a set signed with
-   another key and an older set are refused; a newer set published on an HTTP
-   server by the test is downloaded by the update service (only its changed
-   file), installed and loaded by the idle kiosk, and only the update service
-   user can open a network connection; an emulated USB
-   keyboard and network adapter are blocked by USBGuard (no input device, no
-   network interface) and the excluded drivers are not in the image; the
-   kernel settings, the firewall and the service sandboxes are in place;
-9. after a reboot, the scan reports are still there, the root filesystem is
-   unchanged and the signature set 5 is verified at start;
-10. an image update key to version 2 is inserted: the kiosk installs it in
+8. the cleaned key is inserted again and reported clean;
+9. keys of the other filesystems go through the same scan and cleaning, then
+   are reported clean: exfat, NTFS, ext4 (its files private to their owner,
+   as on the key of a Linux user) and a key with an MBR partition table and a
+   vfat partition; a key on EROFS (a filesystem the kernel mounts, but not
+   allowed) and an ext4 key whose group descriptors are overwritten are
+   refused; a vfat key with a cut cluster chain is mounted, but the file
+   cannot be read: the key is reported not verified (`image/vm/keys.py`;
+   exfat and NTFS have no tool writing files without mounting them: they
+   are formatted in the container, then filled by the kernel of the machine,
+   the kiosk stopped);
+10. a signature update key with a newer set (serial 2) is installed, the
+    engines are reloaded and the new sample it detects is found; a modified
+    set, a set signed with another key and an older set are refused; a newer
+    set published on an HTTP server by the test is downloaded by the update
+    service (only its changed file), installed and loaded by the idle kiosk,
+    and only the update service user can open a network connection; an
+    emulated USB keyboard and network adapter are blocked by USBGuard (no
+    input device, no network interface) and the excluded drivers are not in
+    the image; the kernel settings, the firewall and the service sandboxes are
+    in place;
+11. after a reboot, the scan reports are still there, the root filesystem is
+    unchanged and the signature set 5 is verified at start;
+12. an image update key to version 2 is inserted: the kiosk installs it in
     the free slot and restarts, version 2 boots from slot B and is kept (its
     UKI loses its boot counter), with the same data; version 3, published on
     an HTTP server by the test, is downloaded and installed by the update
@@ -371,9 +382,9 @@ Two more machines boot the same image:
   ("Access Denied") and nothing starts.
 
 The built image is never modified: the machine writes to a new disk overlay
-(`system.qcow2`) at every start. It takes about 5 minutes with KVM.
+(`system.qcow2`) at every start. It takes about 7 minutes with KVM.
 `image/vm.sh test --workdir DIR` keeps the serial console logs, the QEMU logs
-and the key image in `DIR`.
+and the key images in `DIR`.
 
 ## Interactive virtual machine
 
