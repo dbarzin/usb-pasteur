@@ -18,7 +18,7 @@ Docker.
 |---|---|
 | `image/mkosi.conf` | Image definition: Debian 13, x86_64, systemd-boot, unified kernel image (UKI), packages |
 | `image/mkosi.repart/` | Partitions: ESP, two system slots (read-only root filesystem, its dm-verity hash and signature), data partition |
-| `image/mkosi.images/initrd/` | The initrd: the default initrd of mkosi, which restarts instead of opening an emergency shell |
+| `image/mkosi.images/initrd/` | The initrd: the default initrd of mkosi, which restarts instead of opening an emergency shell, without the files a read-only root does not need |
 | `image/mkosi.prepare.chroot` | Runtime dependencies in a virtual environment (`/usr/lib/usb-pasteur`), from `image/requirements.txt` (pinned with their hashes) |
 | `image/mkosi.build.chroot` | usb-pasteur wheel, built from the repository without network |
 | `image/mkosi.postinst.chroot` | Installs usb-pasteur, its configuration, systemd service, tmpfiles and logrotate files (`packaging/`), and the clamd settings |
@@ -210,6 +210,18 @@ the services measured by `systemd-analyze security` (0 to 10, lower is
 better): about 1.6 for clamd, 3.8 for the kiosk (which starts the worker
 sandbox), 2.8 for USBGuard.
 
+## Unified kernel image
+
+The UKI (about 40 MB) holds the kernel, the initrd of the image
+(`image/mkosi.images/initrd/`, without the udev hardware database, charset
+conversions, Perl, documentation and networkd) and an initrd of kernel
+modules. That one only holds what mounts the root filesystem
+(`KernelModulesInitrdInclude=` in `image/mkosi.conf`): disk controllers
+(NVMe, SATA, Intel VMD, eMMC, virtio), dm-verity, EROFS and CRC32C, which
+EROFS loads by name. The other modules are loaded from the root filesystem.
+A computer whose disk controller is not in this list cannot find its root
+filesystem: add its module there.
+
 ## A/B updates of the image
 
 The system is updated as a whole, never file by file
@@ -226,7 +238,7 @@ The system is updated as a whole, never file by file
   with xz, the format that `systemd-sysupdate` of Debian 13 decompresses),
   named with their UUID, the UKI, and a manifest signed with the update key
   (the format of the signature sets, content `image`, serial = version).
-  About 300 MB, of which 130 MB for the UKI.
+  About 215 MB, of which 40 MB for the UKI.
 - **Installing it.** Copy `update-2/` as `usb-pasteur-image/` at the root of a
   USB key and insert it into the kiosk (`updates.image_from_devices`). The
   kiosk verifies the signature, that the version is newer than the running

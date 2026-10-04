@@ -216,7 +216,7 @@ Tasks:
 - [x] Unified Kernel Image (UKI) and Secure Boot (development keys; release keys and their storage still to define)
 - [x] Atomic A/B partition updates (`systemd-sysupdate`), installed from a signed image update device, with boot assessment and automatic rollback
 - [ ] Online image updates (the update service, like the signature sets)
-- [ ] Smaller UKI (130 MB: only the kernel modules the kiosk needs)
+- [x] Smaller UKI: 40 MB instead of 130 MB, the initrd only holds the kernel modules needed to mount the root filesystem
 
 ### Hardening
 
