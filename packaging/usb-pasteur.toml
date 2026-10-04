@@ -181,6 +181,9 @@ enabled = false
 # Folder of a published signature set (manifest.json, its signature and the
 # files). The set is signed: HTTPS is recommended, HTTP is accepted.
 url = ""
+# Folder of a published image update (A/B updates, docs/image.md); "" for
+# no online image updates
+image_url = ""
 # HTTP(S) proxy, e.g. "http://proxy.example.org:3128" ("": direct)
 proxy = ""
 # Timeout of each request, in seconds

@@ -215,7 +215,7 @@ Tasks:
 - [x] `dm-verity` on the system partition
 - [x] Unified Kernel Image (UKI) and Secure Boot (development keys; release keys and their storage still to define)
 - [x] Atomic A/B partition updates (`systemd-sysupdate`), installed from a signed image update device, with boot assessment and automatic rollback
-- [ ] Online image updates (the update service, like the signature sets)
+- [x] Online image updates (`updates.image_url`): downloaded by the update service, installed without network, the idle kiosk restarts on the new version
 - [x] Smaller UKI: 40 MB instead of 130 MB, the initrd only holds the kernel modules needed to mount the root filesystem
 
 ### Hardening

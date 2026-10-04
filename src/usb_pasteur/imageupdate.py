@@ -21,6 +21,11 @@ the UKI to the ESP with 3 boot tries, and the kiosk restarts. The new version
 is kept once the kiosk has started (boot-complete.target); otherwise
 systemd-boot goes back to the previous one.
 
+Online (updates.image_url, usb-pasteur-update.service), the update service
+downloads the published update as an unprivileged user, then installs it as
+root without network (install --staged) and asks the kiosk to restart: the
+kiosk restarts when it is idle.
+
 Two keys protect the kiosk: the update key decides what is installed, the
 Secure Boot key of the image (UKI, root hash) decides what can boot.
 """
@@ -34,13 +39,18 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+import urllib.parse
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from usb_pasteur import sigsets
+from usb_pasteur.config import Config, ConfigError, load_config
+from usb_pasteur.online import Fetcher, UpdateError
 
 UPDATE_FOLDER = "usb-pasteur-image"
 STAGING = Path("/var/lib/usb-pasteur-image")
+# Written once an update is installed online: the kiosk restarts when idle
+RESTART_FLAG = Path("/run/usb-pasteur-image/restart")
 FILES = "files"
 SYSUPDATE_SERVICE = "systemd-sysupdate.service"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -94,6 +104,14 @@ def stage(
     sigsets.SignatureSetError when it is not valid.
     """
     manifest, _, _ = sigsets.read_set(source, keys, sigsets.CONTENT_IMAGE)
+    check_manifest(manifest, running)
+    clear(staging)
+    sigsets.copy_files(source, manifest, staging)
+    return manifest
+
+
+def check_manifest(manifest: sigsets.Manifest, running: int | None) -> None:
+    """A newer version than the running one, with exactly the expected files."""
     if running is not None and manifest.serial <= running:
         raise sigsets.NotNewerError(
             f"image version {manifest.serial} is not newer than the running {running}"
@@ -106,9 +124,6 @@ def stage(
         kinds.append(entry.path.rsplit(".", 3)[1] if entry.path.endswith(".xz") else "efi")
     if sorted(kinds) != ["efi", "root", "verity", "verity-sig"]:
         raise sigsets.SignatureSetError(f"incomplete image update: {', '.join(sorted(kinds))}")
-    clear(staging)
-    sigsets.copy_files(source, manifest, staging)
-    return manifest
 
 
 def apply(staging: Path = STAGING) -> None:
@@ -137,6 +152,62 @@ def clear(staging: Path) -> None:
             shutil.rmtree(path)
         else:
             path.unlink()
+
+
+def download(
+    config: Config,
+    staging: Path,
+    fetcher: Fetcher | None = None,
+    running: int | None = None,
+    log: Callable[[str], None] = print,
+) -> sigsets.Manifest | None:
+    """Download the published image update (updates.image_url) when it is newer."""
+    url = config.updates.image_url
+    if not url:
+        log("no online image updates (updates.image_url)")
+        return None
+    clear(staging)
+    fetcher = fetcher or Fetcher(config.updates.proxy, config.updates.timeout)
+    base = url.rstrip("/") + "/"
+    data = fetcher.read(base + sigsets.MANIFEST, sigsets.MAX_MANIFEST_SIZE)
+    signature = fetcher.read(base + sigsets.SIGNATURE, sigsets.MAX_SIGNATURE_SIZE)
+    running = running_version() if running is None else running
+    try:
+        sigsets.verify_signature(data, signature, sigsets.trusted_keys(config.signatures.keys))
+        manifest = sigsets.parse_manifest(data, sigsets.CONTENT_IMAGE)
+        check_manifest(manifest, running)
+    except sigsets.NotNewerError as ex:
+        log(f"up to date: {ex}")
+        return None
+    except sigsets.SignatureSetError as ex:
+        raise UpdateError(f"published image update refused: {ex}") from ex
+    log(f"image version {manifest.serial}: downloading {len(manifest.files)} files")
+    for entry in manifest.files:
+        target = staging / entry.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fetcher.save(base + urllib.parse.quote(entry.path), target, entry)
+    # Written last: a staged update is complete
+    (staging / sigsets.SIGNATURE).write_bytes(signature)
+    (staging / sigsets.MANIFEST).write_bytes(data)
+    return manifest
+
+
+def install_staged(
+    downloaded: Path, keys: Sequence[Path], running: int | None = None
+) -> sigsets.Manifest | None:
+    """Install an update downloaded by download(), then ask the kiosk to restart."""
+    if not (downloaded / sigsets.MANIFEST).exists():
+        return None
+    try:
+        manifest = stage(
+            downloaded, keys, running=running_version() if running is None else running
+        )
+    finally:
+        clear(downloaded)
+    apply()
+    RESTART_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    RESTART_FLAG.write_text(f"{manifest.serial}\n")
+    return manifest
 
 
 def reboot() -> None:
@@ -204,7 +275,23 @@ def main(argv: list[str] | None = None) -> int:
     p_package.add_argument("image", type=Path, help="disk image built by image/build.sh")
     p_package.add_argument("output", type=Path, help="folder of the update (replaced)")
     p_package.add_argument("--key", type=Path, required=True, help="update key (PEM)")
+    p_download = sub.add_parser(
+        "download", help="download the published image update (updates.image_url) if newer"
+    )
+    p_download.add_argument("--staging", type=Path, required=True)
+    p_download.add_argument(
+        "--config", type=Path, default=Path("/etc/usb-pasteur/usb-pasteur.toml")
+    )
+    p_install = sub.add_parser(
+        "install", help="install a downloaded image update, then ask the kiosk to restart"
+    )
+    p_install.add_argument("folder", type=Path)
+    p_install.add_argument("--keys", type=Path, default=Path("/usr/share/usb-pasteur/keys"))
     args = parser.parse_args(argv)
+    if args.command == "download":
+        return _download(args)
+    if args.command == "install":
+        return _install(args)
     try:
         manifest = package(args.image, args.output, args.key)
     except (ImageUpdateError, sigsets.SignatureSetError, OSError) as ex:
@@ -215,6 +302,31 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     size = sum(f.size for f in manifest.files)
     print(f"image version {manifest.serial}: {len(manifest.files)} files, {size} bytes")
+    return 0
+
+
+def _download(args: argparse.Namespace) -> int:
+    try:
+        manifest = download(load_config(args.config), args.staging)
+    except (ConfigError, UpdateError, OSError) as ex:
+        print(f"usb-pasteur-image: {ex}", file=sys.stderr)
+        return 1
+    if manifest is not None:
+        print(f"image version {manifest.serial} staged in {args.staging}")
+    return 0
+
+
+def _install(args: argparse.Namespace) -> int:
+    try:
+        manifest = install_staged(args.folder, sigsets.trusted_keys(args.keys))
+    except sigsets.NotNewerError as ex:
+        print(f"not installed: {ex}")
+        return 0
+    except (sigsets.SignatureSetError, ImageUpdateError, OSError) as ex:
+        print(f"usb-pasteur-image: {ex}", file=sys.stderr)
+        return 1
+    print("no image update staged" if manifest is None else
+          f"image version {manifest.serial} installed: the kiosk restarts when idle")  # fmt: skip
     return 0
 
 

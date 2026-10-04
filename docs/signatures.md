@@ -77,6 +77,9 @@ A kiosk works offline by default. Online updates need both:
   `usb-pasteur-signatures publish`, served by any web server), and a `proxy`
   when needed.
 
+The same service also installs online image updates (`updates.image_url`,
+see [image.md](image.md#ab-updates-of-the-image)).
+
 `usb-pasteur-update.service` runs in two steps
 (`src/usb_pasteur/online.py`):
 

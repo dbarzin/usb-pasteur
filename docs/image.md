@@ -247,6 +247,12 @@ The system is updated as a whole, never file by file
   the ESP with 3 boot tries (`usb-pasteur_2+3-0.efi`), and the kiosk
   restarts. The running version is never overwritten; the device is not
   scanned.
+- **Online.** With the profile `online` and `updates.image_url` (the URL of
+  a published update folder), `usb-pasteur-update.service` downloads a newer
+  update as its unprivileged user (every file checked), then installs it as
+  root without network (`usb-pasteur-image install`), with the same checks
+  as an update device. The kiosk restarts on the new version when it is idle
+  (between two devices): a scan is never interrupted.
 - **Boot assessment.** The new version is kept (`systemd-bless-boot`) once
   `boot-complete.target` is reached, which requires the kiosk to be ready
   (`Type=notify`). A boot that fails restarts: kernel panic (`panic=10`),
@@ -294,7 +300,7 @@ only, never for a kiosk. It includes the profile `online`, and adds:
 ## Automated test in a virtual machine
 
 ```sh
-image/build-test.sh   # the test image (version 1) and updates to versions 2 and 3
+image/build-test.sh   # the test image (version 1) and updates to versions 2 to 4
 image/vm.sh test
 ```
 
@@ -333,9 +339,12 @@ the virtio console:
    unchanged and the signature set 5 is verified at start;
 10. an image update key to version 2 is inserted: the kiosk installs it in
     the free slot and restarts, version 2 boots from slot B and is kept (its
-    UKI loses its boot counter), with the same data; then a version 3 whose
-    root filesystem is modified is installed: it fails 3 boots (dm-verity,
-    the initrd restarts) and systemd-boot goes back to version 2.
+    UKI loses its boot counter), with the same data; version 3, published on
+    an HTTP server by the test, is downloaded and installed by the update
+    service, then the idle kiosk restarts on it and it is kept; finally a
+    version 4 whose root filesystem is modified is installed from a key: it
+    fails 3 boots (dm-verity, the initrd restarts) and systemd-boot goes back
+    to version 3.
 
 Two more machines boot the same image:
 

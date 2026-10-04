@@ -302,6 +302,8 @@ class Kiosk:
         if event is None:
             return State.STOP
         if event.action is Action.IDLE:
+            if imageupdate.RESTART_FLAG.exists():
+                return self._restart_after_update()
             self._load_new_set()
             return State.WAIT
         if event.action is Action.REMOVE:
@@ -337,11 +339,11 @@ class Kiosk:
             return State.ERROR
         root = self.mounter.mount_point
         if self.config.updates.image_from_devices and _has_folder(root, IMAGE_FOLDER):
-            restart = self._update_image(root / IMAGE_FOLDER)
+            version = self._update_image(root / IMAGE_FOLDER)
             self.display.message("An image update device is not scanned. Remove the device.")
             self._release()
-            if restart:
-                log_event(logger, "restarting")
+            if version is not None:
+                log_event(logger, "restarting", image_version=str(version))
                 imageupdate.reboot()
                 return State.STOP
             return State.WAIT
@@ -357,8 +359,8 @@ class Kiosk:
             return State.WAIT
         return State.SCAN
 
-    def _update_image(self, source: Path) -> bool:
-        """Install the image update of the device; return whether to restart."""
+    def _update_image(self, source: Path) -> int | None:
+        """Install the image update of the device; return the version to restart on."""
         running = imageupdate.running_version()
         self.display.message("Image update device: verifying the update...")
         try:
@@ -368,21 +370,21 @@ class Kiosk:
         except NotNewerError as ex:
             log_event(logger, "image_not_newer", reason=str(ex))
             self.display.message(f"System already up to date: {ex}")
-            return False
+            return None
         except (SignatureSetError, OSError) as ex:
             log_event(logger, "image_update_refused", logging.WARNING, reason=str(ex))
             self.display.message(f"Image update REFUSED: {ex}")
-            return False
+            return None
         self.display.message(f"Installing the system version {manifest.serial}...")
         try:
             imageupdate.apply()
         except imageupdate.ImageUpdateError as ex:
             log_event(logger, "image_update_failed", logging.ERROR, error=str(ex))
             self.display.message(f"Image update FAILED: {ex}")
-            return False
+            return None
         log_event(logger, "image_update_installed", version=manifest.serial, previous=running)
         self.display.message(f"System version {manifest.serial} installed: the kiosk restarts.")
-        return True
+        return manifest.serial
 
     def _update_signatures(self, source: Path) -> None:
         """Install the signature set of the device, then reload the engines."""
@@ -409,6 +411,17 @@ class Kiosk:
         )
         self.display.message(f"Signatures updated: set {manifest.serial}")
         self._reload_engines(before, manifest)
+
+    def _restart_after_update(self) -> State:
+        """An image update was installed online: restart, the kiosk being idle."""
+        try:
+            version = imageupdate.RESTART_FLAG.read_text().strip()
+        except OSError:
+            version = "?"
+        log_event(logger, "restarting", image_version=version)
+        self.display.message(f"System version {version} installed: the kiosk restarts.")
+        imageupdate.reboot()
+        return State.STOP
 
     def _load_new_set(self) -> None:
         """Load a signature set installed meanwhile (online update)."""

@@ -34,4 +34,5 @@ level = "DEBUG"
 [updates]
 enabled = true
 url = "http://10.0.2.2:8080/usb-pasteur-signatures/"
+image_url = "http://10.0.2.2:8080/usb-pasteur-image/"
 CONFIG

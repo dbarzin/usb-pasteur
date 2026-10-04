@@ -188,6 +188,9 @@ class UpdatesConfig:
     # Folder of a published signature set (manifest.json, its signature and
     # the files): HTTPS recommended, HTTP accepted (the set is signed)
     url: str = ""
+    # Folder of a published image update (usb_pasteur.imageupdate): "" for no
+    # online image updates
+    image_url: str = ""
     # HTTP(S) proxy, e.g. http://proxy.example.org:3128 ("": direct)
     proxy: str = ""
     # Timeout of each request, in seconds
@@ -374,16 +377,23 @@ def parse_config(data: dict[str, Any]) -> Config:
 
 def _parse_updates(updates: dict[str, Any]) -> UpdatesConfig:
     _reject_unknown(
-        updates, {"enabled", "url", "proxy", "timeout", "image_from_devices"}, "updates"
+        updates,
+        {"enabled", "url", "image_url", "proxy", "timeout", "image_from_devices"},
+        "updates",
     )
     config = UpdatesConfig(
         enabled=_get(updates, "updates", "enabled", bool, False),
         url=_get(updates, "updates", "url", str, ""),
+        image_url=_get(updates, "updates", "image_url", str, ""),
         proxy=_get(updates, "updates", "proxy", str, ""),
         timeout=_positive(updates, "updates", "timeout", UpdatesConfig.timeout),
         image_from_devices=_get(updates, "updates", "image_from_devices", bool, True),
     )
-    for key, value in (("url", config.url), ("proxy", config.proxy)):
+    for key, value in (
+        ("url", config.url),
+        ("image_url", config.image_url),
+        ("proxy", config.proxy),
+    ):
         if value and not value.startswith(("https://", "http://")):
             raise ConfigError(f"updates.{key} must be an http:// or https:// URL")
     if config.enabled and not config.url:

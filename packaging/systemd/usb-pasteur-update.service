@@ -1,21 +1,26 @@
 [Unit]
-Description=USB-Pasteur online signature update
+Description=USB-Pasteur online updates (signatures and image)
 Documentation=https://github.com/dbarzin/usb-pasteur/blob/main/docs/signatures.md
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=oneshot
-# 1. Download the published set when it is newer (updates.url), as the only
-#    user allowed out by the firewall, without privileges
+# 1. Download the published signature set (updates.url) and image update
+#    (updates.image_url) when they are newer, as the only user allowed out by
+#    the firewall, without privileges. One failing ("-") does not stop the
+#    other.
 User=usb-pasteur-update
 Group=usb-pasteur-update
 StateDirectory=usb-pasteur-update
 StateDirectoryMode=0700
-ExecStart=/usr/bin/usb-pasteur-signatures download --staging /var/lib/usb-pasteur-update/staging
-# 2. Verify and install it, as root ("+": without the sandbox below). The
-#    kiosk loads it when it is idle.
+ExecStart=-/usr/bin/usb-pasteur-signatures download --staging /var/lib/usb-pasteur-update/staging
+ExecStart=-/usr/bin/usb-pasteur-image download --staging /var/lib/usb-pasteur-update/image
+# 2. Verify and install them, as root ("+": without the sandbox below). The
+#    kiosk loads a new signature set, or restarts on a new image version, when
+#    it is idle.
 ExecStartPost=+/usr/bin/usb-pasteur-signatures install /var/lib/usb-pasteur-update/staging --staged
+ExecStartPost=+/usr/bin/usb-pasteur-image install /var/lib/usb-pasteur-update/image
 TimeoutStartSec=2h
 
 NoNewPrivileges=yes

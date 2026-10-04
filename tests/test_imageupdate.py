@@ -11,7 +11,7 @@ from usb_pasteur.device import UsbDevice
 from usb_pasteur.engines.fake import EICAR
 from usb_pasteur.imageupdate import FILES, running_version, slot_partitions, stage
 from usb_pasteur.kiosk import Kiosk, build_pool
-from usb_pasteur.monitor import Action, DeviceEvent
+from usb_pasteur.monitor import NO_DEVICE, Action, DeviceEvent
 
 from .conftest import DirectoryMounter, ListSource, RecordingDisplay
 from .test_sigsets import make_key
@@ -170,3 +170,77 @@ def test_kiosk_refuses_an_image_signed_by_another_key(
     calls = run_kiosk(config, display, root, monkeypatch)
     assert calls == []
     assert any(m.startswith("Image update REFUSED: invalid signature") for m in display.messages)
+
+
+def online_config(tmp_path: Path, url: str) -> Config:
+    from usb_pasteur.config import parse_config
+
+    return parse_config(
+        {
+            "kiosk": {"name": "test", "fake_scan": True},
+            "scan": {"sandbox": False},
+            "signatures": {"keys": str(tmp_path / "keys")},
+            "updates": {"image_url": url},
+        }
+    )
+
+
+def test_download_and_install_online(
+    tmp_path: Path, key: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from .test_online import Server
+
+    server = Server(tmp_path / "www")
+    try:
+        make_update(tmp_path / "www" / "image", 2, key)
+        config = online_config(tmp_path, server.url("image"))
+        downloaded = tmp_path / "downloaded"
+        manifest = imageupdate.download(config, downloaded, running=1, log=lambda _: None)
+        assert manifest is not None
+        assert manifest.serial == 2
+        assert len([p for p in server.requests if "/files/" in p]) == 4
+        # Up to date: nothing more than the manifest and its signature
+        server.requests.clear()
+        assert (
+            imageupdate.download(config, tmp_path / "again", running=2, log=lambda _: None) is None
+        )
+        assert all(p.endswith(("manifest.json", ".sig")) for p in server.requests)
+    finally:
+        server.httpd.shutdown()
+
+    applied: list[bool] = []
+    flag = tmp_path / "run" / "restart"
+    monkeypatch.setattr(imageupdate, "STAGING", tmp_path / "staging")
+    monkeypatch.setattr(imageupdate, "RESTART_FLAG", flag)
+    monkeypatch.setattr(imageupdate, "apply", lambda: applied.append(True))
+    monkeypatch.setattr(
+        imageupdate, "stage", lambda source, keys, running=None: stage(
+            source, keys, tmp_path / "staging", running
+        )
+    )  # fmt: skip
+    installed = imageupdate.install_staged(downloaded, [key.with_suffix(".pem")], running=1)
+    assert installed is not None
+    assert applied == [True]
+    assert flag.read_text() == "2\n"
+    assert list(downloaded.iterdir()) == []
+    # Nothing staged any more
+    assert imageupdate.install_staged(downloaded, [key.with_suffix(".pem")], running=1) is None
+
+
+def test_idle_kiosk_restarts_after_an_online_image_update(
+    config: Config, display: RecordingDisplay, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flag = tmp_path / "restart"
+    flag.write_text("3\n")
+    reboots: list[bool] = []
+    monkeypatch.setattr(imageupdate, "RESTART_FLAG", flag)
+    monkeypatch.setattr(imageupdate, "reboot", lambda: reboots.append(True))
+    pool = build_pool(config)
+    pool.start()
+    try:
+        events = [DeviceEvent(Action.IDLE, NO_DEVICE), DeviceEvent(Action.IDLE, NO_DEVICE)]
+        Kiosk(config, display, ListSource(events), pool, DirectoryMounter(tmp_path)).run()
+    finally:
+        pool.stop()
+    assert reboots == [True]
+    assert "System version 3 installed: the kiosk restarts." in display.messages

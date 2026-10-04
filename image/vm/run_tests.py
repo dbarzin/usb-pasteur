@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from usb_pasteur import sigsets
 
 UPDATE_KEY = Path("image/update.key")
-# Signed image updates to the versions 2 and 3 (image/build-test.sh)
+# Signed image updates to the versions 2 to 4 (image/build-test.sh)
 IMAGE_UPDATES = Path("image/mkosi.output/updates")
 # Published for the online update test: http://10.0.2.2:8080/ in the machine
 PUBLISH_PORT = 8080
@@ -493,6 +493,7 @@ class Publisher:
 
     def stop(self) -> None:
         self.httpd.shutdown()
+        self.httpd.server_close()
 
 
 def check_online_update(vm: Machine, workdir: Path) -> None:
@@ -583,23 +584,49 @@ def check_image_update(vm: Machine, workdir: Path, timeout: float) -> None:
 
     # Version 2: written to the free slot, booted, then kept (boot assessment)
     insert_image_update(vm, workdir, IMAGE_UPDATES / "2", timeout)
-    version, labels, ukis = image_state(vm)
+    version, labels, ukis = wait_kept(vm, "2")
     check(version == "2" and "usb-pasteur_2" in labels, f"after update: {version}, {labels}")
-    deadline = time.monotonic() + 120
-    while "usb-pasteur_2.efi" not in ukis:
-        check(time.monotonic() < deadline, f"version 2 not marked good: {ukis}")
-        time.sleep(2)
-        ukis = image_state(vm)[2]
     check(count_reports(vm) == reports, "scan reports lost by the image update")
     print(f"version 2 installed in the free slot, booted and kept: {', '.join(ukis)}")
 
-    # Version 3 does not boot (its root filesystem is modified): after 3
-    # tries, systemd-boot goes back to version 2
-    insert_image_update(vm, workdir, corrupted_update(workdir, 3), timeout)
+    # Version 3, online: the update service downloads and installs it, then
+    # the idle kiosk restarts
+    restarts = count_events(vm, "restarting")
+    publisher = Publisher(workdir / "www-image")
+    try:
+        shutil.copytree(IMAGE_UPDATES / "3", publisher.root / "usb-pasteur-image")
+        vm.shell.send("systemctl start usb-pasteur-update.service")
+        vm.monitor.wait_event("RESET", timeout=900)
+    finally:
+        publisher.stop()
+    downloaded = [p for p in publisher.requests if "/usb-pasteur-image/files/" in p]
+    check(len(downloaded) == 4, f"files downloaded: {downloaded}")
+    vm.shell.reset()
+    vm.shell.login(timeout)
+    restarted = wait_next_event(vm, "restarting", restarts)
+    check(restarted["image_version"] == "3", f"restart: {restarted}")
+    version, labels, ukis = wait_kept(vm, "3")
+    check(version == "3" and "usb-pasteur_3" in labels, f"after online update: {version}")
+    print(f"version 3 downloaded, installed, the idle kiosk restarted, kept: {', '.join(ukis)}")
+
+    # Version 4 does not boot (its root filesystem is modified): after 3
+    # tries, systemd-boot goes back to version 3
+    insert_image_update(vm, workdir, corrupted_update(workdir, 4), timeout)
     version, labels, ukis = image_state(vm)
-    check(version == "2" and "usb-pasteur_2" in labels, f"after a bad update: {version}")
-    check("usb-pasteur_3+0-3.efi" in ukis, f"version 3 not marked bad: {ukis}")
-    print(f"version 3 failed 3 boots, back to version 2: {', '.join(ukis)}")
+    check(version == "3" and "usb-pasteur_3" in labels, f"after a bad update: {version}")
+    check("usb-pasteur_4+0-3.efi" in ukis, f"version 4 not marked bad: {ukis}")
+    print(f"version 4 failed 3 boots, back to version 3: {', '.join(ukis)}")
+
+
+def wait_kept(vm: Machine, version: str) -> tuple[str, list[str], list[str]]:
+    """Wait until the running version is marked good (its UKI loses its counter)."""
+    deadline = time.monotonic() + 120
+    while True:
+        state = image_state(vm)
+        if f"usb-pasteur_{version}.efi" in state[2]:
+            return state
+        check(time.monotonic() < deadline, f"version {version} not marked good: {state}")
+        time.sleep(2)
 
 
 def check_infected_key(vm: Machine, key: Path) -> None:
@@ -685,7 +712,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.image}: no such image, run image/build.sh --profile test", file=sys.stderr)
         return 2
 
-    for path in (SIGNING_CERTIFICATE, UPDATE_KEY, IMAGE_UPDATES / "2", IMAGE_UPDATES / "3"):
+    updates = [IMAGE_UPDATES / str(version) for version in (2, 3, 4)]
+    for path in (SIGNING_CERTIFICATE, UPDATE_KEY, *updates):
         if not path.exists():
             print(f"{path}: missing, run image/build-test.sh", file=sys.stderr)
             return 2
