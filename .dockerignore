@@ -8,3 +8,5 @@ venv
 .ruff_cache
 dist
 build
+image/mkosi.output
+image/vm/work

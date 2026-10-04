@@ -22,7 +22,7 @@ yara/yara-forge/yara-rules-core.yar
 
 The paths are those of the default configuration
 (`/var/lib/usb-pasteur-signatures/current/...`). The `manifest.json` of a
-subfolder (written by `scripts/fetch-dev-signatures.py`) gives the source,
+subfolder (written by `usb-pasteur-signatures publish`) gives the source,
 version and date of its files; without it, the date of a file is the
 creation date of the set, used for the signature freshness warnings.
 
@@ -65,26 +65,54 @@ The kiosk shows and logs the result (`signatures_installed`,
 
 ## Publishing a set
 
-The `usb-pasteur-signatures` command builds, signs, verifies and installs
-sets. Signing uses `openssl`, so that the private key can stay in a hardware
-token (OpenSSL provider).
+`usb-pasteur-signatures publish` downloads the signatures of every engine
+from their sources, checks that the engines of a kiosk can load them, then
+builds and signs a set (`src/usb_pasteur/publish.py`):
+
+| Source | Files | Notes |
+|---|---|---|
+| `clamav` | `clamav/main.cvd`, `daily`, `bytecode` | updated by `freshclam` (incremental), which verifies their Cisco Talos signature |
+| `yara-forge` | `yara/yara-forge/yara-rules-core.yar` | YARA Forge "core" package, latest GitHub release |
+| `signature-base` | `yara/signature-base/*.yar` | opt-in: YARA Forge already includes its rules |
+| `malwarebazaar` | `malwarebazaar/malwarebazaar.sha256.bin` | full SHA-256 export, needs a free abuse.ch Auth-Key (`ABUSECH_AUTH_KEY`) |
+| `hashlookup` | `hashlookup/hashlookup-full.bloom` | about 1 GB, published monthly |
+
+Downloads are HTTPS only and cached (`--cache`, default
+`~/.cache/usb-pasteur-signatures`): a source that did not change (ETag,
+Last-Modified) is not downloaded again. Before signing, the set is loaded
+with the engines of the kiosk: the YARA rules must compile with YARA-X, the
+MalwareBazaar database and the Hashlookup filter must load, and `clamscan`
+must load the ClamAV databases. A set that fails is never signed, and the
+previous output folder is kept: a broken set, validly signed, would make
+every kiosk that installs it unable to scan. The set must contain the files
+of every engine enabled on the kiosks: a kiosk refuses to scan with a set
+that misses one.
+
+The publication runs in a container holding freshclam, clamscan and the
+engines, for instance every day on the computer that holds the signing key:
 
 ```sh
-# Signature files in a folder, with the layout above
-usb-pasteur-signatures build FOLDER --key update.key   # manifest.json + signature
-usb-pasteur-signatures verify FOLDER --keys KEYS_FOLDER
-cp -r FOLDER /media/KEY/usb-pasteur-signatures
+export ABUSECH_AUTH_KEY=...
+publish/publish.sh /srv/usb-pasteur/usb-pasteur-signatures /secure/update.key
+cp -r /srv/usb-pasteur/usb-pasteur-signatures /media/KEY/
 ```
 
-`build` numbers the set with its creation date (`YYYYMMDDHHMMSS`) unless
-`--serial` is given. `install` installs a set by hand
-(`--target /var/lib/usb-pasteur-signatures`).
+The full set is about 1.2 GB (ClamAV about 115 MB, YARA Forge core 8 MB,
+Hashlookup 1 GB). With the full ClamAV databases, clamd uses about 1 GB of
+memory on the kiosk (measured in the test virtual machine). Signing uses `openssl`, so that the private key can stay in
+a hardware token (OpenSSL provider). The release key of the project and its
+storage are not defined yet.
 
-The service that will download the sources (ClamAV, YARA Forge,
-MalwareBazaar, Hashlookup), build and sign sets with the release key of the
-project is a task of phase 2. Until then, sets are built by hand, for
-instance from `scripts/fetch-dev-signatures.py` and the ClamAV databases of
-`freshclam`.
+The command also works on sets built by other means:
+
+```sh
+usb-pasteur-signatures build FOLDER --key update.key   # manifest.json + signature
+usb-pasteur-signatures verify FOLDER --keys KEYS_FOLDER
+usb-pasteur-signatures install FOLDER                   # by hand, on a kiosk
+```
+
+`build` and `publish` number the set with its creation date
+(`YYYYMMDDHHMMSS`) unless `--serial` is given.
 
 ## Development keys
 
@@ -93,6 +121,6 @@ instance from `scripts/fetch-dev-signatures.py` and the ClamAV databases of
 `update.pem`, and the test image installs a set signed with `update.key`.
 Never use them for a kiosk.
 
-On a development computer, the signatures of
-`scripts/fetch-dev-signatures.py` are not a signed set: set `verify = false`
-in `[signatures]`.
+On a development computer, `usb-pasteur-signatures publish` without `--key`
+builds an unsigned set and prints the matching configuration, with
+`verify = false` in `[signatures]`.

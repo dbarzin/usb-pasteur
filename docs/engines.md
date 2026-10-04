@@ -40,9 +40,11 @@ the kiosk refuses to start (`usb-pasteur --check-config` shows why). At least
 one content engine (ClamAV or YARA-X) is required: hash lookups alone only
 recognize files that are already known.
 
-Run `scripts/fetch-dev-signatures.py` (a **development helper**) to download
-the YARA rules, the MalwareBazaar list and the Hashlookup filter into
-`./dev-signatures/`. It prints the matching configuration.
+For development, `usb-pasteur-signatures publish dev-signatures --sources
+yara-forge,malwarebazaar,hashlookup` downloads the YARA rules, the
+MalwareBazaar list and the Hashlookup filter into `./dev-signatures/`, checks
+them, and prints the matching configuration (an unsigned set: see
+[signatures.md](signatures.md)).
 
 ### MalwareBazaar
 

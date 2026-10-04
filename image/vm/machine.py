@@ -48,10 +48,10 @@ class MachineError(Exception):
     pass
 
 
-def make_key(path: Path, content: Path | None = None) -> None:
+def make_key(path: Path, content: Path | None = None, size: int = KEY_SIZE) -> None:
     """Create a vfat USB key image holding the files of content (default: the corpus)."""
     with path.open("wb") as image:
-        image.truncate(KEY_SIZE)
+        image.truncate(size)
     subprocess.run(["mkfs.vfat", "-n", "USBKEY", str(path)], check=True, capture_output=True)
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp) if content is None else content

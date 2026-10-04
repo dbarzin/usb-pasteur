@@ -4,7 +4,7 @@ The origin and integrity of the signature files are verified by the kiosk
 before the engines load them (usb_pasteur.sigsets). Their version, date and
 source come from:
 
-- the manifest.json of their folder, written by scripts/fetch-dev-signatures.py:
+- the manifest.json of their folder, written by usb_pasteur.publish:
 
     {"hashlookup-full.bloom": {"version": "...", "date": "2026-10-01T00:00:00Z",
                                "source": "https://...", "sha256": "..."}}

@@ -407,7 +407,7 @@ def build(folder: Path, serial: int | None = None, created: datetime | None = No
     """Write the manifest of the files of folder (to be signed with sign()).
 
     The source, version and date of a file come from the manifest.json of its
-    folder when there is one (scripts/fetch-dev-signatures.py writes them).
+    folder when there is one (usb_pasteur.publish writes them).
     """
     created = created or datetime.now(UTC).replace(microsecond=0)
     serial = serial or int(created.strftime("%Y%m%d%H%M%S"))
@@ -443,6 +443,25 @@ def main(argv: list[str] | None = None) -> int:
         prog="usb-pasteur-signatures", description="Build, sign, verify and install signature sets"
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    p_publish = sub.add_parser(
+        "publish", help="download the signatures, check them, then build and sign a set"
+    )
+    p_publish.add_argument("output", type=Path, help="folder of the set (replaced)")
+    p_publish.add_argument(
+        "--key", type=Path, help="private key (PEM) to sign the set; none: development set"
+    )
+    p_publish.add_argument(
+        "--sources",
+        default="clamav,yara-forge,malwarebazaar,hashlookup",
+        help="comma-separated: clamav, yara-forge, signature-base, malwarebazaar, hashlookup",
+    )
+    p_publish.add_argument(
+        "--cache", type=Path, default=Path.home() / ".cache" / "usb-pasteur-signatures"
+    )
+    p_publish.add_argument("--serial", type=int, help="default: the date, YYYYMMDDHHMMSS")
+    p_publish.add_argument(
+        "--abusech-key-file", type=Path, help="abuse.ch Auth-Key (default: $ABUSECH_AUTH_KEY)"
+    )
     p_build = sub.add_parser("build", help="write the manifest of a folder, and sign it")
     p_build.add_argument("folder", type=Path)
     p_build.add_argument("--serial", type=int, help="default: the date, YYYYMMDDHHMMSS")
@@ -457,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
         if name == "install":
             p.add_argument("--target", type=Path, default=Path("/var/lib/usb-pasteur-signatures"))
     args = parser.parse_args(argv)
+    if args.command == "publish":
+        return _publish(args)
     try:
         if args.command == "build":
             manifest = build(args.folder, args.serial)
@@ -479,6 +500,29 @@ def main(argv: list[str] | None = None) -> int:
     except (SignatureSetError, OSError, subprocess.CalledProcessError) as ex:
         print(f"usb-pasteur-signatures: {ex}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _publish(args: argparse.Namespace) -> int:
+    from usb_pasteur.publish import PublishError, development_config, publish, read_auth_key
+
+    sources = [s.strip() for s in args.sources.split(",") if s.strip()]
+    try:
+        manifest = publish(
+            args.output.resolve(),
+            sources,
+            args.cache,
+            args.key,
+            args.serial,
+            read_auth_key(args.abusech_key_file),
+        )
+    except (PublishError, SignatureSetError, OSError, subprocess.CalledProcessError) as ex:
+        print(f"usb-pasteur-signatures: {ex}", file=sys.stderr)
+        return 1
+    print(f"serial {manifest.serial}: {len(manifest.files)} files, {manifest.total_size} bytes")
+    if args.key is None:
+        print("\nNot signed: for development only. Configuration (usb-pasteur.toml):\n")
+        print(development_config(args.output.resolve(), sources))
     return 0
 
 

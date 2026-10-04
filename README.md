@@ -66,7 +66,7 @@ The pandora-box code has been ported to the `usb_pasteur` package (`src/usb_past
 | `device.py` | Hardened mounting (`ro,noexec,nosuid,nodev`, read-write only to clean) |
 | `inventory.py` | Device inventory: never follows links, never leaves the device, limits |
 | `scanner.py`, `workers.py`, `worker.py` | Scan in supervised worker processes, timeouts and watchdog |
-| `sigsets.py` | Signed signature sets: verification, installation, `usb-pasteur-signatures` command |
+| `sigsets.py`, `publish.py` | Signed signature sets: verification, installation, publication from the sources, `usb-pasteur-signatures` command |
 | `sandbox.py`, `seccomp.py`, `protocol.py` | Worker sandbox (bubblewrap, dedicated user, system call filter), validated JSON messages from the workers |
 | `pipeline.py`, `hashing.py`, `filetype.py` | Per file: hashes (SHA-256, SHA-1, MD5), libmagic type, engines |
 | `engines/` | Engine interface, MalwareBazaar, Hashlookup, ClamAV, YARA-X and fake engine |
@@ -122,8 +122,8 @@ uv pip install -e ".[dev]"
 
 ```sh
 cp packaging/usb-pasteur.toml usb-pasteur.toml
-# development helper: YARA rules, MalwareBazaar (needs ABUSECH_AUTH_KEY), Hashlookup
-python scripts/fetch-dev-signatures.py --dest dev-signatures
+# YARA rules, MalwareBazaar (needs ABUSECH_AUTH_KEY), Hashlookup: an unsigned set
+usb-pasteur-signatures publish dev-signatures --sources yara-forge,malwarebazaar,hashlookup
 # copy the printed [engines.*] and [signatures] settings into usb-pasteur.toml,
 # set the quarantine, report and log folders, then check the configuration
 usb-pasteur --config usb-pasteur.toml --check-config
@@ -239,7 +239,8 @@ See [docs/signatures.md](docs/signatures.md).
 - [x] Signed signature sets (Ed25519, verified with `openssl`): no rollback, atomic installation, previous set kept
 - [x] Signature verification before loading databases: the installed set is verified at each start, the engines (and clamd) only read it
 - [x] Offline updates from a signed USB device, for air-gapped kiosks
-- [ ] Publication: a service building signed sets from the sources (ClamAV, YARA Forge, MalwareBazaar, Hashlookup), and the release signing key
+- [x] Publication: `usb-pasteur-signatures publish` downloads the sources (ClamAV, YARA Forge, MalwareBazaar, Hashlookup) with a cache, checks the set with the kiosk engines, then signs it; container `publish/`
+- [ ] Release signing key of the project, its storage (hardware token) and the publication schedule
 - [ ] Online updates through a dedicated channel (proxy, domain allowlist)
 
 ### Testing in a virtual machine

@@ -50,7 +50,7 @@ pip install -e ".[dev]"
 
 Use the `FAKE_SCAN` mode (`fake_scan = true` in the configuration, or `--fake-scan`) to work on the orchestrator and the interface without real detection engines: only the EICAR test file is reported as malicious. Use `--interface console` to run without curses.
 
-To work with the real engines, install `clamav-daemon` and download the other signatures with the development helper `scripts/fetch-dev-signatures.py`: see [docs/engines.md](docs/engines.md).
+To work with the real engines, install `clamav-daemon` and download the other signatures with `usb-pasteur-signatures publish dev-signatures --sources yara-forge,malwarebazaar,hashlookup`: see [docs/engines.md](docs/engines.md).
 
 ### Coding standards
 
