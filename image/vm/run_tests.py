@@ -350,6 +350,12 @@ def check_hardening(vm: Machine) -> None:
     check(not missing, f"kernel options missing: {missing}")
     lockdown = vm.shell.run("cat /sys/kernel/security/lockdown").strip()
     check("[confidentiality]" in lockdown, f"kernel lockdown: {lockdown}")
+    # Image updates restart the kiosk when it is idle, never systemd-sysupdate;
+    # no system or configuration extension merged from /var
+    for unit in ("systemd-sysupdate.timer", "systemd-sysupdate-reboot.timer",
+                 "systemd-sysext.service", "systemd-confext.service"):  # fmt: skip
+        state = vm.shell.run(f"systemctl is-enabled {unit} || true").strip()
+        check(state != "enabled", f"{unit} is enabled")
     # No login prompt on the screens of the kiosk (the test image has a
     # serial console only)
     gettys = vm.shell.run("ps -o tty= -C agetty || true").split()

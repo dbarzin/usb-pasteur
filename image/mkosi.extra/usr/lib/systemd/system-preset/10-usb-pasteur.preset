@@ -31,9 +31,18 @@ disable getty-static.service
 # ctrl-alt-del.target (mkosi.postinst.chroot) is kept
 disable reboot.target
 
-# Image updates are installed by the kiosk (usb_pasteur.imageupdate)
-disable systemd-sysupdate.timer
-disable systemd-sysupdate-reboot.timer
+# Image updates are installed by the kiosk (usb_pasteur.imageupdate), which
+# restarts when it is idle. The services too: a unit without preset is
+# enabled, and their [Install] Also= enables the timers (the reboot one would
+# restart the kiosk during a scan)
+disable systemd-sysupdate.*
+disable systemd-sysupdate-reboot.*
+
+# No system or configuration extension: an image left in /var/lib/extensions
+# or /var/lib/confexts would be merged over /usr or /etc at every boot, and
+# outlive a compromise that dm-verity would otherwise undo at the next boot
+disable systemd-sysext.*
+disable systemd-confext.*
 
 # Not used on the kiosk
 disable clamav-clamonacc.service
