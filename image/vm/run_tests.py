@@ -810,7 +810,12 @@ def check_filesystem_keys(vm: Machine, workdir: Path) -> None:
         build(images[name])
     # exfat and NTFS are filled by the kernel of the machine, the kiosk stopped
     started = count_events(vm, "kiosk_started")
+    log = KioskLog(vm)
     vm.shell.run("systemctl stop usb-pasteur", timeout=120)
+    # Stopped cleanly: the kiosk ran its cleanup (unmount), exit status 0
+    log.wait("kiosk_stopped", timeout=10)
+    result = vm.shell.run("systemctl show -P Result usb-pasteur").strip()
+    check(result == "success", f"kiosk stop: {result}")
     for fs_type in keys.FILLED_IN_MACHINE:
         keys.fill_in_machine(vm, images[fs_type], fs_type)
     vm.shell.run("systemctl start usb-pasteur", timeout=300)

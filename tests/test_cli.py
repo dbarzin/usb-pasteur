@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import signal
 from pathlib import Path
 
 import pytest
 
-from usb_pasteur.cli import apply_overrides, main, parse_args
+from usb_pasteur.cli import apply_overrides, main, parse_args, stop_on_sigterm
 from usb_pasteur.config import parse_config
 
 # Sandboxed scan workers need root (see test_sandbox_needs_root)
@@ -68,3 +69,15 @@ def test_overrides() -> None:
     config = apply_overrides(parse_config({}), args)
     assert config.kiosk.fake_scan is True
     assert config.kiosk.interface == "console"
+
+
+def test_sigterm_stops_like_ctrl_c() -> None:
+    # systemctl stop: the kiosk unmounts the device and exits 0, instead of
+    # the exit(1) of the ncurses handler
+    previous = signal.getsignal(signal.SIGTERM)
+    try:
+        stop_on_sigterm()
+        with pytest.raises(KeyboardInterrupt):
+            os.kill(os.getpid(), signal.SIGTERM)
+    finally:
+        signal.signal(signal.SIGTERM, previous)

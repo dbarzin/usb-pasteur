@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
+import signal
 import socket
 import sys
 from pathlib import Path
@@ -112,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
     from usb_pasteur.monitor import UdevSource
 
     display = make_display(config.kiosk.interface)
+    # Before curses starts: ncurses handles SIGTERM itself when it has its
+    # default action, and exits(1) without the cleanup below
+    stop_on_sigterm()
     display.start()
     notify_ready()
     try:
@@ -123,6 +127,15 @@ def main(argv: list[str] | None = None) -> int:
         pool.stop()
         lock.release()
     return 0
+
+
+def _stop(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
+
+
+def stop_on_sigterm() -> None:
+    """systemctl stop: stop like Ctrl-C, unmounting the device on the way out."""
+    signal.signal(signal.SIGTERM, _stop)
 
 
 def notify_ready() -> None:
