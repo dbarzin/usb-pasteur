@@ -185,6 +185,9 @@ url = ""
 proxy = ""
 # Timeout of each request, in seconds
 timeout = 300.0
+# Install the signed image update of a device that holds a usb-pasteur-image
+# folder at its root, then restart (A/B updates, docs/image.md)
+image_from_devices = true
 
 [report]
 # JSON scan reports, one per scanned device

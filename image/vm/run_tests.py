@@ -16,6 +16,7 @@ import argparse
 import functools
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from usb_pasteur import sigsets
 
 UPDATE_KEY = Path("image/update.key")
+# Signed image updates to the versions 2 and 3 (image/build-test.sh)
+IMAGE_UPDATES = Path("image/mkosi.output/updates")
 # Published for the online update test: http://10.0.2.2:8080/ in the machine
 PUBLISH_PORT = 8080
 PUBLISHED = "usb-pasteur-signatures"
@@ -225,9 +228,10 @@ def check_filesystems(vm: Machine) -> None:
         check(not vm.shell.succeeds(f"touch {path}"), f"{path} is writable")
     fs_type, options = vm.shell.run("findmnt -n -o FSTYPE,OPTIONS /var").split()
     check(fs_type == "ext4" and "rw" in options.split(","), f"/var: {fs_type} {options}")
-    # The data partition and its filesystem grew to fill the disk (8 GB)
+    # The data partition (1 GB in the image) and its filesystem grew to fill
+    # the disk (8 GB, after the two system slots)
     size = int(vm.shell.run("findmnt -n -b -o SIZE /var"))
-    check(size > 6 * 1024**3, f"/var was not grown: {size} bytes")
+    check(size > 4 * 1024**3, f"/var was not grown: {size} bytes")
     print(f"root: read-only erofs, /var: ext4, {size / 1024**3:.1f} GiB")
 
 
@@ -527,6 +531,77 @@ def check_online_update(vm: Machine, workdir: Path) -> None:
         publisher.stop()
 
 
+def image_state(vm: Machine) -> tuple[str, list[str], list[str]]:
+    """Running image version, labels of the root partitions, UKIs in the ESP."""
+    version = vm.shell.run(". /etc/os-release; echo $IMAGE_VERSION").strip()
+    # The partitions under the dm-verity device of the root filesystem
+    labels = vm.shell.run(
+        "cat /sys/dev/block/$(mountpoint -d /)/slaves/*/uevent | sed -n 's/^PARTNAME=//p'"
+    ).split()
+    ukis = sorted(vm.shell.run("ls /boot/EFI/Linux").split())
+    return version, labels, ukis
+
+
+def insert_image_update(vm: Machine, workdir: Path, update: Path, timeout: float) -> None:
+    """Insert a key holding an image update; wait until the machine restarts."""
+    content = workdir / f"image-{update.name}"
+    shutil.copytree(update, content / "usb-pasteur-image")
+    image = workdir / f"image-{update.name}.img"
+    make_key(image, content, 1024 * 1024 * 1024)
+    before = count_events(vm, "image_update_installed")
+    vm.insert_key(image)
+    # The kiosk installs the update, then restarts the machine
+    vm.monitor.wait_event("RESET", timeout=900)
+    vm.remove_key()
+    vm.shell.reset()
+    vm.shell.login(timeout)
+    installed = wait_next_event(vm, "image_update_installed", before)
+    check(installed["version"] == int(update.name), f"image update: {installed}")
+
+
+def corrupted_update(workdir: Path, version: int) -> Path:
+    """The image update to that version, with its root filesystem modified."""
+    update = workdir / str(version)
+    shutil.copytree(IMAGE_UPDATES / str(version), update)
+    [packed] = (update / "files").glob("*.root.raw.xz")
+    raw = packed.with_suffix("")
+    subprocess.run(["xz", "-q", "-d", str(packed)], check=True)
+    with raw.open("r+b") as root:
+        root.seek(1024)  # the EROFS superblock: read when it is mounted
+        root.write(b"\xff" * 128)
+    subprocess.run(["xz", "-q", "-T0", "-2", str(raw)], check=True)
+    sigsets.build(update, version, content=sigsets.CONTENT_IMAGE)
+    sigsets.sign(update, UPDATE_KEY)
+    return update
+
+
+def check_image_update(vm: Machine, workdir: Path, timeout: float) -> None:
+    step("A/B image update")
+    version, labels, ukis = image_state(vm)
+    check(version == "1" and "usb-pasteur_1" in labels, f"running: {version}, {labels}")
+    reports = count_reports(vm)
+
+    # Version 2: written to the free slot, booted, then kept (boot assessment)
+    insert_image_update(vm, workdir, IMAGE_UPDATES / "2", timeout)
+    version, labels, ukis = image_state(vm)
+    check(version == "2" and "usb-pasteur_2" in labels, f"after update: {version}, {labels}")
+    deadline = time.monotonic() + 120
+    while "usb-pasteur_2.efi" not in ukis:
+        check(time.monotonic() < deadline, f"version 2 not marked good: {ukis}")
+        time.sleep(2)
+        ukis = image_state(vm)[2]
+    check(count_reports(vm) == reports, "scan reports lost by the image update")
+    print(f"version 2 installed in the free slot, booted and kept: {', '.join(ukis)}")
+
+    # Version 3 does not boot (its root filesystem is modified): after 3
+    # tries, systemd-boot goes back to version 2
+    insert_image_update(vm, workdir, corrupted_update(workdir, 3), timeout)
+    version, labels, ukis = image_state(vm)
+    check(version == "2" and "usb-pasteur_2" in labels, f"after a bad update: {version}")
+    check("usb-pasteur_3+0-3.efi" in ukis, f"version 3 not marked bad: {ukis}")
+    print(f"version 3 failed 3 boots, back to version 2: {', '.join(ukis)}")
+
+
 def check_infected_key(vm: Machine, key: Path) -> None:
     step("insert the infected key")
     vm.insert_key(key)
@@ -610,9 +685,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.image}: no such image, run image/build.sh --profile test", file=sys.stderr)
         return 2
 
-    for path in (SIGNING_CERTIFICATE, UPDATE_KEY):
+    for path in (SIGNING_CERTIFICATE, UPDATE_KEY, IMAGE_UPDATES / "2", IMAGE_UPDATES / "3"):
         if not path.exists():
-            print(f"{path}: no signing key, run image/build.sh", file=sys.stderr)
+            print(f"{path}: missing, run image/build-test.sh", file=sys.stderr)
             return 2
 
     image = args.image.resolve()
@@ -635,6 +710,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_usb_policy(vm)
                 check_hardening(vm)
                 check_reboot(vm, args.boot_timeout)
+                check_image_update(vm, workdir, args.boot_timeout)
             current = workdir / "modified-root"
             check_modified_root(image, current, args.boot_timeout)
             current = workdir / "foreign-key"

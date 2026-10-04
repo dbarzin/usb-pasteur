@@ -49,6 +49,11 @@ from pathlib import Path
 
 FORMAT = "usb-pasteur-signatures"
 VERSION = 1
+# What a manifest lists: the signature set of the engines, or an update of the
+# system image (usb_pasteur.imageupdate). A manifest of one kind is never
+# accepted as the other.
+CONTENT_SIGNATURES = "signatures"
+CONTENT_IMAGE = "image"
 MANIFEST = "manifest.json"
 SIGNATURE = "manifest.json.sig"
 # Folder holding a signature set at the root of an update device
@@ -94,6 +99,7 @@ class Manifest:
     serial: int
     created: datetime
     files: tuple[FileEntry, ...]
+    content: str = CONTENT_SIGNATURES
 
     def entry(self, path: str) -> FileEntry | None:
         return next((f for f in self.files if f.path == path), None)
@@ -108,6 +114,7 @@ class Manifest:
         data = {
             "format": FORMAT,
             "version": VERSION,
+            "content": self.content,
             "serial": self.serial,
             "created": self.created.isoformat(),
             "files": files,
@@ -119,14 +126,16 @@ class Manifest:
         return sum(f.size for f in self.files)
 
 
-def parse_manifest(data: bytes) -> Manifest:
-    """Validate a manifest (its signature must have been verified first)."""
+def parse_manifest(data: bytes, content: str = CONTENT_SIGNATURES) -> Manifest:
+    """Validate a manifest of that content (its signature must have been verified first)."""
     try:
         raw = json.loads(data)
     except ValueError as ex:
         raise SignatureSetError(f"invalid manifest: {ex}") from ex
     if not isinstance(raw, dict) or raw.get("format") != FORMAT or raw.get("version") != VERSION:
         raise SignatureSetError("not a signature set manifest (format, version)")
+    if raw.get("content", CONTENT_SIGNATURES) != content:
+        raise SignatureSetError(f"not a manifest of {content}: {str(raw.get('content'))[:40]}")
     serial = raw.get("serial")
     if isinstance(serial, bool) or not isinstance(serial, int) or serial <= 0:
         raise SignatureSetError("invalid manifest serial")
@@ -152,7 +161,7 @@ def parse_manifest(data: bytes) -> Manifest:
         if not all(isinstance(v, str) and len(v) <= 1024 for v in meta.values()):
             raise SignatureSetError(f"invalid metadata for {path!r}")
         entries.append(FileEntry(validate_path(path), sha256, size, **meta))
-    return Manifest(serial, created, tuple(sorted(entries, key=lambda e: e.path)))
+    return Manifest(serial, created, tuple(sorted(entries, key=lambda e: e.path)), content)
 
 
 def validate_path(path: object) -> str:
@@ -250,7 +259,9 @@ def _read_small(dir_fd: int, name: str, limit: int) -> bytes:
     return data
 
 
-def read_set(folder: Path, keys: Sequence[Path]) -> tuple[Manifest, bytes, bytes]:
+def read_set(
+    folder: Path, keys: Sequence[Path], content: str = CONTENT_SIGNATURES
+) -> tuple[Manifest, bytes, bytes]:
     """Read and verify the manifest of a set: (manifest, its bytes, signature)."""
     try:
         with _open_dir(folder) as dir_fd:
@@ -260,7 +271,7 @@ def read_set(folder: Path, keys: Sequence[Path]) -> tuple[Manifest, bytes, bytes
         raise SignatureSetError(f"cannot open the signature set: {ex.strerror}") from ex
     # The exact bytes that were verified are parsed
     verify_signature(data, signature, keys)
-    return parse_manifest(data), data, signature
+    return parse_manifest(data, content), data, signature
 
 
 def _copy_verified(src_fd: int, entry: FileEntry, target: Path) -> None:
@@ -278,6 +289,36 @@ def _copy_verified(src_fd: int, entry: FileEntry, target: Path) -> None:
     if size != entry.size or digest.hexdigest() != entry.sha256:
         raise SignatureSetError(f"{entry.path}: content does not match the manifest")
     target.chmod(0o644)
+
+
+def _make_parents(root: Path, relpath: str) -> Path:
+    """The target path of a file of a set, with its folders (0755) created."""
+    target = root / relpath
+    for parent in reversed(target.relative_to(root).parents[:-1]):
+        if not (root / parent).is_dir():
+            (root / parent).mkdir()
+            (root / parent).chmod(0o755)
+    return target
+
+
+def _copy_entry(source_fd: int, entry: FileEntry, target: Path) -> None:
+    try:
+        with _open_file(source_fd, entry.path) as fd:
+            _copy_verified(fd, entry, target)
+    except OSError as ex:
+        raise SignatureSetError(f"cannot read {entry.path}: {ex.strerror}") from ex
+
+
+def copy_files(source: Path, manifest: Manifest, target: Path) -> None:
+    """Copy the files of a verified manifest from source, each checked."""
+    if shutil.disk_usage(target).free < manifest.total_size:
+        raise SignatureSetError("not enough free space")
+    try:
+        with _open_dir(source) as source_fd:
+            for entry in manifest.files:
+                _copy_entry(source_fd, entry, _make_parents(target, entry.path))
+    except OSError as ex:
+        raise SignatureSetError(f"cannot read the files: {ex.strerror}") from ex
 
 
 def _hash_file(path: Path) -> tuple[str, int]:
@@ -360,11 +401,7 @@ def install(source: Path, folder: Path, keys: Sequence[Path]) -> Manifest:
             raise SignatureSetError("not enough free space for the signature set")
         with _open_dir(source) as source_fd:
             for entry in manifest.files:
-                target = staging / entry.path
-                for parent in reversed(target.relative_to(staging).parents[:-1]):
-                    if not (staging / parent).is_dir():
-                        (staging / parent).mkdir()
-                        (staging / parent).chmod(0o755)
+                target = _make_parents(staging, entry.path)
                 old = None if installed is None else installed.entry(entry.path)
                 if (
                     old is not None
@@ -374,11 +411,7 @@ def install(source: Path, folder: Path, keys: Sequence[Path]) -> Manifest:
                     # Unchanged file: shared with the installed set (sets are never modified)
                     os.link(installed_folder / entry.path, target)
                     continue
-                try:
-                    with _open_file(source_fd, entry.path) as fd:
-                        _copy_verified(fd, entry, target)
-                except OSError as ex:
-                    raise SignatureSetError(f"cannot read {entry.path}: {ex.strerror}") from ex
+                _copy_entry(source_fd, entry, target)
         for name, content in ((MANIFEST, data), (SIGNATURE, signature)):
             (staging / name).write_bytes(content)
             (staging / name).chmod(0o644)
@@ -408,7 +441,12 @@ def _remove_old_sets(sets: Path, current: int) -> None:
 # -- building a set (publisher side) ---------------------------------------------------
 
 
-def build(folder: Path, serial: int | None = None, created: datetime | None = None) -> Manifest:
+def build(
+    folder: Path,
+    serial: int | None = None,
+    created: datetime | None = None,
+    content: str = CONTENT_SIGNATURES,
+) -> Manifest:
     """Write the manifest of the files of folder (to be signed with sign()).
 
     The source, version and date of a file come from the manifest.json of its
@@ -426,8 +464,8 @@ def build(folder: Path, serial: int | None = None, created: datetime | None = No
         sha256, size = _hash_file(path)
         meta = _folder_metadata(path)
         entries.append(FileEntry(validate_path(rel), sha256, size, **meta))
-    manifest = Manifest(serial, created, tuple(entries))
-    parse_manifest(manifest.to_json())  # same checks as the kiosk
+    manifest = Manifest(serial, created, tuple(entries), content)
+    parse_manifest(manifest.to_json(), content)  # same checks as the kiosk
     (folder / MANIFEST).write_bytes(manifest.to_json())
     return manifest
 

@@ -9,11 +9,13 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+from usb_pasteur import imageupdate
 from usb_pasteur.config import Config
 from usb_pasteur.device import DeviceError, Mounter, SystemMountWatcher, UsbDevice
 from usb_pasteur.engines import Engine, EngineError
 from usb_pasteur.engines.registry import NoEngineError, engine_specs, load_engines
 from usb_pasteur.hashing import hash_fd
+from usb_pasteur.imageupdate import UPDATE_FOLDER as IMAGE_FOLDER
 from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.monitor import Action, DeviceSource
 from usb_pasteur.policy import device_verdict
@@ -334,7 +336,16 @@ class Kiosk:
             self.display.message(f"Cannot mount device: {ex}")
             return State.ERROR
         root = self.mounter.mount_point
-        if self.config.signatures.update_from_devices and _has_update(root):
+        if self.config.updates.image_from_devices and _has_folder(root, IMAGE_FOLDER):
+            restart = self._update_image(root / IMAGE_FOLDER)
+            self.display.message("An image update device is not scanned. Remove the device.")
+            self._release()
+            if restart:
+                log_event(logger, "restarting")
+                imageupdate.reboot()
+                return State.STOP
+            return State.WAIT
+        if self.config.signatures.update_from_devices and _has_folder(root, UPDATE_FOLDER):
             self._update_signatures(root / UPDATE_FOLDER)
             self.display.message("A signature update device is not scanned. Remove the device.")
             self._release()
@@ -345,6 +356,33 @@ class Kiosk:
             self._release()
             return State.WAIT
         return State.SCAN
+
+    def _update_image(self, source: Path) -> bool:
+        """Install the image update of the device; return whether to restart."""
+        running = imageupdate.running_version()
+        self.display.message("Image update device: verifying the update...")
+        try:
+            manifest = imageupdate.stage(
+                source, trusted_keys(self.config.signatures.keys), running=running
+            )
+        except NotNewerError as ex:
+            log_event(logger, "image_not_newer", reason=str(ex))
+            self.display.message(f"System already up to date: {ex}")
+            return False
+        except (SignatureSetError, OSError) as ex:
+            log_event(logger, "image_update_refused", logging.WARNING, reason=str(ex))
+            self.display.message(f"Image update REFUSED: {ex}")
+            return False
+        self.display.message(f"Installing the system version {manifest.serial}...")
+        try:
+            imageupdate.apply()
+        except imageupdate.ImageUpdateError as ex:
+            log_event(logger, "image_update_failed", logging.ERROR, error=str(ex))
+            self.display.message(f"Image update FAILED: {ex}")
+            return False
+        log_event(logger, "image_update_installed", version=manifest.serial, previous=running)
+        self.display.message(f"System version {manifest.serial} installed: the kiosk restarts.")
+        return True
 
     def _update_signatures(self, source: Path) -> None:
         """Install the signature set of the device, then reload the engines."""
@@ -637,10 +675,10 @@ class Kiosk:
             log_event(logger, "unmount_failed", logging.ERROR, error=str(ex))
 
 
-def _has_update(root: Path) -> bool:
-    """The device holds a signature set at its root (a folder, not a link)."""
+def _has_folder(root: Path, name: str) -> bool:
+    """The device holds that folder at its root (a folder, not a link)."""
     try:
-        return stat.S_ISDIR(os.lstat(root / UPDATE_FOLDER).st_mode)
+        return stat.S_ISDIR(os.lstat(root / name).st_mode)
     except OSError:
         return False
 

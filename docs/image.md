@@ -17,14 +17,16 @@ Docker.
 | Path | Role |
 |---|---|
 | `image/mkosi.conf` | Image definition: Debian 13, x86_64, systemd-boot, unified kernel image (UKI), packages |
-| `image/mkosi.repart/` | Partitions: ESP, read-only root filesystem and its dm-verity hash and signature, data partition |
+| `image/mkosi.repart/` | Partitions: ESP, two system slots (read-only root filesystem, its dm-verity hash and signature), data partition |
+| `image/mkosi.images/initrd/` | The initrd: the default initrd of mkosi, which restarts instead of opening an emergency shell |
 | `image/mkosi.prepare.chroot` | Runtime dependencies in a virtual environment (`/usr/lib/usb-pasteur`), from `image/requirements.txt` (pinned with their hashes) |
 | `image/mkosi.build.chroot` | usb-pasteur wheel, built from the repository without network |
 | `image/mkosi.postinst.chroot` | Installs usb-pasteur, its configuration, systemd service, tmpfiles and logrotate files (`packaging/`), and the clamd settings |
-| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units), `/etc/fstab`, growth of the data partition (`/usr/lib/repart.d/`), USBGuard policy, kernel settings (`sysctl.d`), firewall (`nftables.conf`), clamd sandbox |
+| `image/mkosi.extra/` | Files copied into the image: systemd presets (enabled and disabled units), `/etc/fstab`, growth of the data partition (`/usr/lib/repart.d/`), A/B updates (`/usr/lib/sysupdate.d/`, boot assessment), USBGuard policy, kernel settings (`sysctl.d`), firewall (`nftables.conf`), clamd sandbox |
 | `image/mkosi.profiles/test/` | Test profile, for the virtual machine tests only |
 | `image/vm/` | Virtual machine tests: corpus, QEMU driver, automated test |
 | `image/build.sh`, `image/vm.sh` | Build and run in the container |
+| `image/build-test.sh`, `image/package-update.sh` | Build the images of the virtual machine test; build a signed image update |
 
 ## Build
 
@@ -46,15 +48,20 @@ The cache is not rebuilt when `image/requirements.txt` or
 `image/mkosi.prepare.chroot` change: rebuild it with `image/build.sh -f`
 (`docker volume rm usb-pasteur-mkosi` removes it completely).
 
-The disk image has five partitions:
+The disk image has two system slots (A/B updates) and a data partition:
 
 | Partition | Filesystem | Content |
 |---|---|---|
-| ESP | vfat, 512 MB | systemd-boot and the UKI, both signed |
-| root | EROFS, read-only | the whole system but `/var` (about 400 MB) |
-| root-verity | | dm-verity hash tree of the root filesystem |
-| root-verity-sig | | signature of the root hash |
+| ESP | vfat, 512 MB | systemd-boot and the UKIs (`usb-pasteur_<version>.efi`), all signed |
+| root, slot A (`usb-pasteur_<version>`) | EROFS, read-only, 1 GB | the whole system but `/var` (about 400 MB used) |
+| root-verity, slot A | 64 MB | dm-verity hash tree of the root filesystem |
+| root-verity-sig, slot A | 16 KB | signature of the root hash |
+| root, root-verity, root-verity-sig, slot B (`_empty`) | same sizes | the next version (A/B updates) |
 | data (`usb-pasteur-data`) | ext4, 1 GB in the image | `/var`: scan reports, quarantine, logs, signed signature sets (clamd reads its databases there) |
+
+The version of the image is in `image/mkosi.version` (`--image-version=N`
+overrides it): it is in `/etc/os-release` (`IMAGE_VERSION`), in the labels of
+its partitions and in the name of its UKI.
 
 The root filesystem is read-only by design (EROFS cannot be written at all):
 the system and its configuration only change with a new image. Everything
@@ -203,6 +210,43 @@ the services measured by `systemd-analyze security` (0 to 10, lower is
 better): about 1.6 for clamd, 3.8 for the kiosk (which starts the worker
 sandbox), 2.8 for USBGuard.
 
+## A/B updates of the image
+
+The system is updated as a whole, never file by file
+(`src/usb_pasteur/imageupdate.py`, `image/mkosi.extra/usr/lib/sysupdate.d/`).
+
+- **Building an update.** Build the new version, then package it:
+
+  ```sh
+  image/build.sh --image-version=2
+  image/package-update.sh image/mkosi.output/usb-pasteur.raw update-2 image/update.key
+  ```
+
+  `update-2/` holds the partitions of slot A of the new image (compressed
+  with xz, the format that `systemd-sysupdate` of Debian 13 decompresses),
+  named with their UUID, the UKI, and a manifest signed with the update key
+  (the format of the signature sets, content `image`, serial = version).
+  About 300 MB, of which 130 MB for the UKI.
+- **Installing it.** Copy `update-2/` as `usb-pasteur-image/` at the root of a
+  USB key and insert it into the kiosk (`updates.image_from_devices`). The
+  kiosk verifies the signature, that the version is newer than the running
+  one and every file, copies them to `/var/lib/usb-pasteur-image`, then
+  `systemd-sysupdate` writes the partitions to the free slot and the UKI to
+  the ESP with 3 boot tries (`usb-pasteur_2+3-0.efi`), and the kiosk
+  restarts. The running version is never overwritten; the device is not
+  scanned.
+- **Boot assessment.** The new version is kept (`systemd-bless-boot`) once
+  `boot-complete.target` is reached, which requires the kiosk to be ready
+  (`Type=notify`). A boot that fails restarts: kernel panic (`panic=10`),
+  failure in the initrd (its emergency shell restarts,
+  `image/mkosi.images/initrd/`), or no `boot-complete.target` in 15 minutes.
+  After 3 failed tries, systemd-boot boots the previous version again; the
+  data (`/var`) is shared by the versions.
+
+Two keys protect the update: the update key decides what is installed, the
+Secure Boot key decides what can boot (the UKI is signed and holds the root
+hash of its slot).
+
 ## Dependencies
 
 Runtime dependencies are pinned with their hashes in `image/requirements.txt`.
@@ -238,7 +282,7 @@ only, never for a kiosk. It includes the profile `online`, and adds:
 ## Automated test in a virtual machine
 
 ```sh
-image/build.sh --profile test
+image/build-test.sh   # the test image (version 1) and updates to versions 2 and 3
 image/vm.sh test
 ```
 
@@ -274,7 +318,12 @@ the virtio console:
    network interface) and the excluded drivers are not in the image; the
    kernel settings, the firewall and the service sandboxes are in place;
 9. after a reboot, the scan reports are still there, the root filesystem is
-   unchanged and the signature set 5 is verified at start.
+   unchanged and the signature set 5 is verified at start;
+10. an image update key to version 2 is inserted: the kiosk installs it in
+    the free slot and restarts, version 2 boots from slot B and is kept (its
+    UKI loses its boot counter), with the same data; then a version 3 whose
+    root filesystem is modified is installed: it fails 3 boots (dm-verity,
+    the initrd restarts) and systemd-boot goes back to version 2.
 
 Two more machines boot the same image:
 
@@ -284,7 +333,7 @@ Two more machines boot the same image:
   ("Access Denied") and nothing starts.
 
 The built image is never modified: the machine writes to a new disk overlay
-(`system.qcow2`) at every start. It takes about a minute and a half with KVM.
+(`system.qcow2`) at every start. It takes about 5 minutes with KVM.
 `image/vm.sh test --workdir DIR` keeps the serial console logs, the QEMU logs
 and the key image in `DIR`.
 

@@ -182,8 +182,8 @@ Goal: ship a ready-to-flash system image with the smallest possible attack surfa
 A first image is built with mkosi from Debian 13 packages and boots in a QEMU/KVM virtual machine, where an automated test plays the whole workflow with an emulated USB key and the real engines. The root filesystem is read-only (EROFS) and protected by dm-verity, the data (`/var`) is on its own partition, grown to fill the disk at boot, and the bootloader and unified kernel image are signed for Secure Boot. Only USB storage devices are allowed (USBGuard), and the image has no driver for USB network, wireless or Bluetooth devices. The system is hardened (kernel settings and lockdown, firewall, no login console, clamd sandbox) and the scan workers run in a sandbox (bubblewrap, dedicated user, system call filter). The kiosk only uses a signed signature set, verified at each start; without one, it scans nothing and waits for a signature update device. With the image profile `online`, signature sets are also downloaded from a published folder. See [docs/image.md](docs/image.md):
 
 ```sh
-image/build.sh --profile test   # build the test image (Docker only)
-image/vm.sh test                # end-to-end test in a virtual machine
+image/build-test.sh   # build the test images (Docker only)
+image/vm.sh test      # end-to-end test in a virtual machine
 ```
 
 ### Build
@@ -196,6 +196,7 @@ image/vm.sh test                # end-to-end test in a virtual machine
 ### Reference hardware
 
 - **Computer**: refurbished Lenovo ThinkCentre (x86_64)
+- **Memory**: 2 GB minimum, the size of the test virtual machine (clamd alone uses about 1 GB with the full ClamAV databases)
 - **Display**: 7-inch touchscreen
 - **Enclosure**: 3D-printed
 
@@ -213,7 +214,9 @@ Tasks:
 - [x] Read-only root filesystem, variable data on a separate partition
 - [x] `dm-verity` on the system partition
 - [x] Unified Kernel Image (UKI) and Secure Boot (development keys; release keys and their storage still to define)
-- [ ] Atomic A/B partition updates (`systemd-sysupdate`)
+- [x] Atomic A/B partition updates (`systemd-sysupdate`), installed from a signed image update device, with boot assessment and automatic rollback
+- [ ] Online image updates (the update service, like the signature sets)
+- [ ] Smaller UKI (130 MB: only the kernel modules the kiosk needs)
 
 ### Hardening
 
@@ -257,7 +260,7 @@ Tasks:
 - [ ] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4; only vfat for now), plus partitioned, unsupported and corrupted filesystems
 - [x] An emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard: no input device, no network interface
 - [ ] No outgoing network outside the update channel
-- [ ] A/B update and rollback tested in the virtual machine
+- [x] A/B update and rollback tested in the virtual machine
 - [ ] Run in continuous integration (KVM when nested virtualization is available, TCG emulation otherwise)
 
 ## Phase 3 — Kiosk interface

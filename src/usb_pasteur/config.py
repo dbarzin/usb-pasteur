@@ -192,6 +192,9 @@ class UpdatesConfig:
     proxy: str = ""
     # Timeout of each request, in seconds
     timeout: float = 300.0
+    # Install the signed image update of a device (usb-pasteur-image/), then
+    # restart (A/B updates, usb_pasteur.imageupdate)
+    image_from_devices: bool = True
 
 
 @dataclass(frozen=True)
@@ -370,12 +373,15 @@ def parse_config(data: dict[str, Any]) -> Config:
 
 
 def _parse_updates(updates: dict[str, Any]) -> UpdatesConfig:
-    _reject_unknown(updates, {"enabled", "url", "proxy", "timeout"}, "updates")
+    _reject_unknown(
+        updates, {"enabled", "url", "proxy", "timeout", "image_from_devices"}, "updates"
+    )
     config = UpdatesConfig(
         enabled=_get(updates, "updates", "enabled", bool, False),
         url=_get(updates, "updates", "url", str, ""),
         proxy=_get(updates, "updates", "proxy", str, ""),
         timeout=_positive(updates, "updates", "timeout", UpdatesConfig.timeout),
+        image_from_devices=_get(updates, "updates", "image_from_devices", bool, True),
     )
     for key, value in (("url", config.url), ("proxy", config.proxy)):
         if value and not value.startswith(("https://", "http://")):

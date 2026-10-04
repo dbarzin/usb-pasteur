@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -112,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
 
     display = make_display(config.kiosk.interface)
     display.start()
+    notify_ready()
     try:
         Kiosk(config, display, UdevSource(), pool, signatures_error=signatures_error).run()
     except KeyboardInterrupt:
@@ -121,6 +123,21 @@ def main(argv: list[str] | None = None) -> int:
         pool.stop()
         lock.release()
     return 0
+
+
+def notify_ready() -> None:
+    """Tell systemd that the kiosk is ready (Type=notify, boot assessment)."""
+    address = os.environ.get("NOTIFY_SOCKET", "")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC) as sock:
+            sock.connect(address)
+            sock.sendall(b"READY=1")
+    except OSError as ex:
+        print(f"usb-pasteur: cannot notify systemd: {ex}", file=sys.stderr)
 
 
 def _engine_error(ex: EngineError) -> None:

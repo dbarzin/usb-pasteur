@@ -417,7 +417,11 @@ class Machine:
     def reboot(self, timeout: float) -> None:
         """Reboot the machine and wait for the shell."""
         self.shell.send("systemctl reboot")
-        self.monitor.wait_event("RESET", timeout=120)
+        self.wait_reboot(timeout)
+
+    def wait_reboot(self, timeout: float) -> None:
+        """Wait until the machine reboots by itself, then for the shell."""
+        self.monitor.wait_event("RESET", timeout=timeout)
         self.shell.reset()
         self.shell.login(timeout)
 

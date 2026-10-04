@@ -29,6 +29,10 @@ disable getty-static.service
 # ctrl-alt-del.target (mkosi.postinst.chroot) is kept
 disable reboot.target
 
+# Image updates are installed by the kiosk (usb_pasteur.imageupdate)
+disable systemd-sysupdate.timer
+disable systemd-sysupdate-reboot.timer
+
 # Not used on the kiosk
 disable clamav-clamonacc.service
 disable usbguard-dbus.service

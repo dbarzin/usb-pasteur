@@ -10,7 +10,12 @@ Conflicts=getty@tty1.service
 After=getty@tty1.service
 
 [Service]
-Type=simple
+# Ready once the engines are loaded (or without signatures, waiting for an
+# update): boot-complete.target of the image waits for it
+Type=notify
+NotifyAccess=main
+# Verifying the signature set and compiling YARA rules take time
+TimeoutStartSec=15min
 ExecStart=/usr/bin/usb-pasteur
 Restart=always
 RestartSec=2
@@ -41,7 +46,7 @@ LogsDirectoryMode=0750
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_NET_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/media/usb-pasteur /var/lib/usb-pasteur-signatures
+ReadWritePaths=/media/usb-pasteur /var/lib/usb-pasteur-signatures /var/lib/usb-pasteur-image
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
