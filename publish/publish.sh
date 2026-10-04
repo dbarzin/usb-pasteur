@@ -8,7 +8,7 @@
 set -eu
 
 if [ $# -lt 2 ]; then
-    sed -n '2,8p' "$0" >&2
+    sed -n '2,7p' "$0" >&2
     exit 2
 fi
 output=$(realpath -m "$1")
