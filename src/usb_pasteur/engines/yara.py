@@ -247,8 +247,15 @@ class YaraEngine(Engine):
         for name, value in externals(file).items():
             self._scanner.set_global(name, value)
         try:
-            # The magic link reads the descriptor already open: no new path lookup
-            results = self._scanner.scan_file(f"/proc/self/fd/{file.fd}")
+            # Read through the descriptor: opening /proc/self/fd/N would open
+            # the file again, with the permissions of the sandboxed worker
+            # (refused for a file private to its owner on ext4). yara-x only
+            # scans bytes; the size is bounded by limits.max_file_size.
+            data = _read_all(file.fd, file.size)
+        except OSError as ex:
+            return EngineResult(self.name, Verdict.ERROR, error=f"read error: {ex.strerror}")
+        try:
+            results = self._scanner.scan(data)
         except yara_x.TimeoutError:
             return EngineResult(self.name, Verdict.ERROR, error=f"timeout ({self.timeout:g}s)")
         except yara_x.ScanError as ex:
@@ -275,6 +282,22 @@ class YaraEngine(Engine):
         if suspicious:
             return EngineResult(self.name, Verdict.SUSPICIOUS, tuple(suspicious), facts=facts)
         return EngineResult(self.name, Verdict.CLEAN, facts=facts)
+
+
+def _read_all(fd: int, size: int) -> bytes:
+    """Read a file from its start, without moving the offset of the descriptor.
+
+    One read for a regular file (a single chunk is joined without a copy).
+    """
+    chunks = []
+    offset = 0
+    while offset < size:
+        chunk = os.pread(fd, size - offset, offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+    return b"".join(chunks)
 
 
 def externals(file: FileInfo) -> dict[str, str]:

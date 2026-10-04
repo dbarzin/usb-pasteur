@@ -120,6 +120,17 @@ def test_score_mapping(
     assert result.detections == detections
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+def test_scans_the_descriptor_of_a_file_it_cannot_open(rules_dir: Path, tmp_path: Path) -> None:
+    # On ext4, files private to their owner: the kiosk opens them, the
+    # sandboxed worker could not
+    engine = make_engine(rules_dir, tmp_path)
+    with file_info(tmp_path, b"x MALICIOUS-MARKER x") as info:
+        (tmp_path / "sample").chmod(0)
+        result = engine.scan(info)
+    assert result.verdict is Verdict.MALICIOUS, result
+
+
 def test_informational_match(rules_dir: Path, tmp_path: Path) -> None:
     result = scan(make_engine(rules_dir, tmp_path), tmp_path, b"INFO-MARKER")
     assert result.verdict is Verdict.CLEAN
