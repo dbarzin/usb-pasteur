@@ -235,7 +235,7 @@ Tasks:
 - [x] Limited set of supported filesystems (vfat, exfat, ntfs3, ext4): the kiosk refuses to mount any other
 - [x] Hardened systemd services (`ProtectSystem`, `NoNewPrivileges`, seccomp filters; `PrivateNetwork` and `MemoryDenyWriteExecute` for clamd), exposure measured by `systemd-analyze security` in the virtual machine test
 - [x] Each scan worker runs in a `bubblewrap` sandbox, without network, under a dedicated user without capabilities, with a system call filter; the kiosk opens the files and passes their descriptors, and only accepts validated JSON from the workers
-- [ ] One worker per engine, so that a compromised engine cannot forge the results of another one
+- [x] One worker per engine, so that a compromised engine cannot forge the results of another one: the kiosk hashes the files itself, hash engines never get the file, the kiosk combines the results
 - [x] Audit log (`auditd`) for sensitive operations
 - [x] Assessment with `lynis` and the ANSSI configuration recommendations for GNU/Linux systems
 

@@ -105,25 +105,27 @@ def engine_info_message(engines: list[EngineInfo]) -> list[dict[str, Any]]:
     ]
 
 
+def engine_result_message(result: EngineResult) -> dict[str, Any]:
+    """The result of the engine of a worker for one file."""
+    return {
+        "engine": result.engine,
+        "verdict": result.verdict.value,
+        "detections": list(result.detections),
+        "error": result.error,
+        "reason": result.reason,
+        "facts": dict(result.facts),
+        "duration": result.duration,
+    }
+
+
 def result_message(result: FileResult) -> dict[str, Any]:
-    """The part of a file result computed by the worker."""
+    """A whole file result (tests and tools)."""
     info = result.info
     return {
         "verdict": result.verdict.value,
         "detail": result.detail,
         "duration": result.duration,
-        "results": [
-            {
-                "engine": r.engine,
-                "verdict": r.verdict.value,
-                "detections": list(r.detections),
-                "error": r.error,
-                "reason": r.reason,
-                "facts": dict(r.facts),
-                "duration": r.duration,
-            }
-            for r in result.results
-        ],
+        "results": [engine_result_message(r) for r in result.results],
         "info": None
         if info is None
         else {
@@ -166,6 +168,27 @@ def decode_engines(value: object) -> list[EngineInfo]:
             )
         )
     return engines
+
+
+def decode_engine_result(value: object, engine: str) -> EngineResult:
+    """The result of a worker for its own engine, and no other."""
+    r = _dict(value)
+    if _str(r.get("engine")) != engine:
+        raise ProtocolError(f"result of another engine: {_str(r.get('engine'))[:100]}")
+    return EngineResult(
+        engine=engine,
+        verdict=_enum(Verdict, r.get("verdict")),
+        detections=tuple(_str(d) for d in _list(r.get("detections"))),
+        error=_optional_str(r.get("error")),
+        reason=_optional_str(r.get("reason")),
+        facts=_facts(r.get("facts")),
+        duration=_number(r.get("duration")),
+    )
+
+
+def decode_file_type(message: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """Type of the file identified by a content worker (informational)."""
+    return _optional_str(message.get("mime")), _optional_str(message.get("description"))
 
 
 def decode_result(value: object, root: Path, entry: Entry, engines: set[str]) -> FileResult:

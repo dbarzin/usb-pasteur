@@ -270,11 +270,18 @@ The scan workers parse hostile files with several engines (libmagic, YARA-X,
 the clamd client...): they are assumed compromisable (`scan.sandbox`,
 `src/usb_pasteur/sandbox.py`).
 
+- **One engine per worker**: a compromised engine (a crafted file
+  exploiting YARA-X or libmagic) cannot forge the result of another engine.
+  The kiosk hashes each file itself, asks the worker of each hash engine
+  (MalwareBazaar, Hashlookup) with the hashes only, then passes the file to
+  a worker of each content engine (ClamAV, YARA-X), and combines their
+  results itself; a worker only reports the result of its own engine.
+  Content engines have `scan.workers` workers each (4: up to four files at
+  the same time), hash engines one.
 - **No access to the device**: the kiosk opens each file safely (no link
-  followed, the file of the inventory) and passes the open descriptor to a
-  worker, which never opens a file of the device. The key is mounted with a
-  group of the worker user (vfat, exFAT, NTFS): YARA-X reopens the
-  descriptor it gets.
+  followed, the file of the inventory) and passes the open descriptor to the
+  workers of the content engines, which never open a file of the device;
+  the workers of the hash engines never get the file.
 - **bubblewrap**: new PID, IPC, UTS, cgroup and network namespaces (no
   network interface but loopback); a file system holding only `/usr`, a few
   files of `/etc`, the signature folders of the enabled engines
@@ -291,9 +298,7 @@ the clamd client...): they are assumed compromisable (`scan.sandbox`,
   and the file is reported as an error.
 
 bubblewrap runs as root (the kiosk service), so unprivileged user namespaces
-stay disabled. The workers of one kiosk still share their engines: a
-compromised engine could forge the result of another engine of the same
-worker.
+stay disabled.
 
 The virtual machine test checks these settings and prints the exposure of
 the services measured by `systemd-analyze security` (0 to 10, lower is
@@ -410,10 +415,10 @@ the virtio console:
 
 1. the kiosk starts with its four engines and the signature set 1, verified,
    and no systemd unit fails;
-2. the four scan workers run in their sandbox (user, capabilities,
-   `no_new_privs`, seccomp, network namespace, no device or kiosk data in
-   their file system); Secure Boot is enabled, the kernel is locked down and
-   the root filesystem is on dm-verity;
+2. the ten scan workers (one engine each) run in their sandbox (user,
+   capabilities, `no_new_privs`, seccomp, network namespace, no device or
+   kiosk data in their file system); Secure Boot is enabled, the kernel is
+   locked down and the root filesystem is on dm-verity;
 3. the root filesystem is read-only EROFS, and `/var` was grown to fill the
    8 GB disk of the machine;
 4. an emulated USB key (a vfat disk image holding the corpus) is inserted,

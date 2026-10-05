@@ -10,7 +10,15 @@ import sys
 import time
 from pathlib import Path
 
-from usb_pasteur.engines import Engine, EngineError, EngineResult, FakeEngine, FileInfo, Verdict
+from usb_pasteur.engines import (
+    Engine,
+    EngineError,
+    EngineKind,
+    EngineResult,
+    FakeEngine,
+    FileInfo,
+    Verdict,
+)
 
 
 class SuspiciousEngine(FakeEngine):
@@ -75,8 +83,10 @@ class CompromisedEngine(Engine):
     """Simulates code running in a compromised worker: it writes forged
     messages on the socket of the worker (whose number is its argument).
 
-    payload: "clean" (a forged clean result of an unknown engine), "pickle"
-    (a pickled object that writes the proof file if unpickled), "garbage".
+    payload: "clean" (a forged clean result of an unknown engine), "other"
+    (a forged clean result of the fake engine, for its own task: the second
+    of the first file), "pickle" (a pickled object that writes the proof file
+    if unpickled), "garbage".
     """
 
     name = "compromised"
@@ -109,6 +119,21 @@ class CompromisedEngine(Engine):
                 },
             }
             data = json.dumps(forged).encode()
+        elif self.payload == "other":
+            forged = {
+                "type": "result",
+                "task": 2,
+                "result": {
+                    "engine": "fake",
+                    "verdict": "clean",
+                    "detections": [],
+                    "error": None,
+                    "reason": None,
+                    "facts": {},
+                    "duration": 0,
+                },
+            }
+            data = json.dumps(forged).encode()
         elif self.payload == "pickle":
             data = pickle.dumps(("result", 1, _Exploit(self.proof)))
         else:
@@ -117,3 +142,15 @@ class CompromisedEngine(Engine):
         os.write(fd, struct.pack("!i", len(data)) + data)
         time.sleep(3600)
         return EngineResult(self.name, Verdict.CLEAN)
+
+
+class ProbeHashEngine(Engine):
+    """A hash engine that reports whether it got the file, and knows every file."""
+
+    name = "probe"
+    kind = EngineKind.HASH
+
+    def scan(self, file: FileInfo) -> EngineResult:
+        return EngineResult(
+            self.name, Verdict.CLEAN, facts={"known": True, "got_file": file.fd >= 0}
+        )

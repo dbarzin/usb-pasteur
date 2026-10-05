@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from usb_pasteur.results import FileResult
 from usb_pasteur.workers import WorkerPool
 
 from .conftest import FAKE, started_pool
-from .engines import CompromisedEngine, FailingLoadEngine, MisbehavingEngine
+from .engines import CompromisedEngine, FailingLoadEngine, MisbehavingEngine, ProbeHashEngine
 
 
 def make_files(root: Path, names: list[str]) -> None:
@@ -91,8 +92,12 @@ def test_hung_engine_is_killed(tmp_path: Path) -> None:
     assert time.monotonic() - start < 30
     hung = results["bad-hang.txt"]
     assert hung.verdict is Verdict.ERROR
-    assert hung.detail == "engine timeout in engine misbehaving"
-    assert hung.results[0].engine == "misbehaving"
+    assert hung.detail == "misbehaving: engine timeout"
+    # Only the hung engine: the other one answered for the file
+    assert {r.engine: r.verdict for r in hung.results} == {
+        "fake": Verdict.CLEAN,
+        "misbehaving": Verdict.ERROR,
+    }
     assert all(results[n].verdict is Verdict.CLEAN for n in ("a.txt", "b.txt", "c.txt"))
 
 
@@ -111,7 +116,7 @@ def test_crashed_worker(tmp_path: Path) -> None:
         assert pool.restarts == 1
     crashed = results["bad-crash.txt"]
     assert crashed.verdict is Verdict.ERROR
-    assert crashed.detail == "scan worker crashed (exit code 3) in engine misbehaving"
+    assert crashed.detail == "misbehaving: scan worker crashed (exit code 3)"
     assert results["ok1.txt"].verdict is Verdict.CLEAN
     assert results["ok2.txt"].verdict is Verdict.CLEAN
 
@@ -139,8 +144,41 @@ def test_compromised_worker(tmp_path: Path, payload: str) -> None:
         assert pool.restarts == 1
     result = results["evil.txt"]
     assert result.verdict is Verdict.ERROR
-    assert result.detail.startswith("scan worker killed: invalid message")
+    assert result.detail.startswith("compromised: scan worker killed: invalid message")
     assert not proof.exists()
+
+
+def test_a_compromised_engine_cannot_forge_another_one(tmp_path: Path) -> None:
+    """A worker only reports its own engine: the detection of another one stays."""
+    from .samples import eicar
+
+    root = tmp_path / "key"
+    root.mkdir()
+    (root / "evil.com").write_bytes(eicar())
+    specs = [
+        EngineSpec("fake", FakeEngine),
+        EngineSpec("compromised", CompromisedEngine, ("other",)),
+    ]
+    with started_pool(specs, workers=1) as pool:
+        results = run(pool, root)
+    result = results["evil.com"]
+    engines = {r.engine: r for r in result.results}
+    assert engines["fake"].verdict is Verdict.MALICIOUS
+    assert engines["compromised"].verdict is Verdict.ERROR
+    assert "result of another engine: fake" in (engines["compromised"].error or "")
+    assert result.verdict is Verdict.MALICIOUS
+
+
+def test_one_worker_per_engine(tmp_path: Path) -> None:
+    make_files(tmp_path, ["a.txt"])
+    with started_pool(misbehaving("raise"), workers=3) as pool:
+        # A content engine has scan.workers workers each: 2 engines x 3
+        assert len(pool.pids) == 6
+        result = run(pool, tmp_path)["a.txt"]
+    # The kiosk hashed the file itself
+    assert result.info is not None
+    assert result.info.sha256 == hashlib.sha256(b"a.txt").hexdigest()
+    assert [r.engine for r in result.results] == ["fake", "misbehaving"]
 
 
 def test_unsafe_file_is_not_passed_to_a_worker(tmp_path: Path) -> None:
@@ -155,3 +193,19 @@ def test_unsafe_file_is_not_passed_to_a_worker(tmp_path: Path) -> None:
     assert result.verdict is Verdict.ERROR
     # Replaced (new inode) or, when the inode is reused, a new size
     assert result.detail.endswith("since the inventory")
+
+
+@pytest.mark.parametrize("skip", [False, True])
+def test_hash_engines_never_get_the_file(tmp_path: Path, skip: bool) -> None:
+    make_files(tmp_path, ["a.txt"])
+    specs = [EngineSpec("probe", ProbeHashEngine), EngineSpec("fake", FakeEngine)]
+    options = PipelineOptions(skip_content_for_known=skip)
+    with started_pool(specs, workers=2, options=options) as pool:
+        # One worker for the hash engine, scan.workers for the content engine
+        assert len(pool.pids) == 3
+        result = run(pool, tmp_path)["a.txt"]
+    engines = {r.engine: r for r in result.results}
+    assert engines["probe"].facts == {"known": True, "got_file": False}
+    # A known file: the content engines are skipped only when configured
+    assert engines["fake"].verdict is (Verdict.SKIPPED if skip else Verdict.CLEAN)
+    assert result.verdict is Verdict.CLEAN

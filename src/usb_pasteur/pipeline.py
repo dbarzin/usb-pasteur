@@ -24,9 +24,11 @@ __all__ = [
     "EngineCallback",
     "PipelineOptions",
     "error_result",
+    "file_detail",
     "run_engines",
     "scan_entry",
     "scan_fd",
+    "skip_content",
 ]
 
 # Called before each engine runs (the scan watchdog arms the engine timeout)
@@ -102,7 +104,7 @@ def scan_fd(
         size=entry.size,
         verdict=verdict,
         results=tuple(results),
-        detail=_detail(verdict, results),
+        detail=file_detail(verdict, results),
         duration=time.monotonic() - start,
         info=info,
         rel_path=entry.rel_path,
@@ -120,7 +122,8 @@ def error_result(entry: Entry, detail: str, start: float | None = None) -> FileR
     )
 
 
-def _detail(verdict: Verdict, results: Sequence[EngineResult]) -> str:
+def file_detail(verdict: Verdict, results: Sequence[EngineResult]) -> str:
+    """Why a file has its verdict (errors, known file)."""
     if verdict is Verdict.ERROR:
         errors = [f"{r.engine}: {r.detail}" for r in results if r.verdict is Verdict.ERROR]
         return "; ".join(errors) or "no complete engine result"
@@ -141,16 +144,22 @@ def run_engines(
     engines are only skipped for known files that no engine reports.
     """
     results = [run_engine(e, info, on_engine) for e in engines if e.kind is EngineKind.HASH]
-    malicious = any(r.verdict is Verdict.MALICIOUS for r in results)
-    known = any(r.facts.get("known") is True for r in results)
+    skip = skip_content(results, options)
     for engine in engines:
         if engine.kind is EngineKind.HASH:
             continue
-        if known and not malicious and options.skip_content_for_known:
+        if skip:
             results.append(EngineResult(engine.name, Verdict.SKIPPED, reason=KNOWN_FILE))
         else:
             results.append(run_engine(engine, info, on_engine))
     return results
+
+
+def skip_content(hash_results: Sequence[EngineResult], options: PipelineOptions) -> bool:
+    """Skip the content engines: a known file that no hash engine reports."""
+    malicious = any(r.verdict is Verdict.MALICIOUS for r in hash_results)
+    known = any(r.facts.get("known") is True for r in hash_results)
+    return options.skip_content_for_known and known and not malicious
 
 
 def run_engine(
