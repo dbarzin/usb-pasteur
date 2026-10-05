@@ -132,6 +132,11 @@ MaxScanSize 400M
 StreamMaxLength 100M
 ```
 
+The kiosk image also sets `ScanImageFuzzyHash no`: ClamAV would decode every
+image, also those inside a PDF or an Office document, to compare a fuzzy hash
+with a few signatures of known images. It took half the scan time of a
+29 MB PDF of images (41 s, then 19 s); the images are still scanned.
+
 Files bigger than `[engines.clamav] max_file_size` are errors without being
 sent: keep it equal to the clamd limits.
 
