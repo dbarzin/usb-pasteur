@@ -200,14 +200,16 @@ image/vm.sh test      # end-to-end test in a virtual machine
 - **Display**: Waveshare 7-inch HDMI LCD (C), capacitive touchscreen, 1024x600 (USB touch controller `0eef:0005`)
 - **Enclosure**: 3D-printed
 
+Validated hardware, its settings and the BIOS configuration: [docs/hardware.md](docs/hardware.md).
+
 Tasks:
 
-- [ ] List of validated ThinkCentre models (CPU, RAM, USB ports, Secure Boot support); first one: ThinkCentre M720q (10T7, Core i5-9400T, Intel UHD 630)
-- [ ] Touchscreen model selection, driver support and calibration
+- [x] List of validated ThinkCentre models (CPU, RAM, USB ports, Secure Boot support): ThinkCentre M720q Tiny (10T7, Core i5-9400T, Intel UHD 630)
+- [x] Touchscreen model selection and driver support: Waveshare 7-inch HDMI LCD (C), mode of the screen on the kernel command line, touch controller allowed by USBGuard
 - [ ] Enclosure design published in the repository (source files + STL), under an open hardware license
 - [ ] Assembly guide (bill of materials, printing settings, wiring, USB port layout for the user)
 - [ ] Physical hardening: only the scanning USB ports reachable from the outside, other ports and BIOS access protected
-- [ ] BIOS configuration guide (password, boot order locked, Secure Boot with project keys)
+- [x] BIOS configuration guide (password, boot order locked, Secure Boot with the image key enrolled from setup mode, VT-d, restart after a power failure)
 
 ### System integrity
 
