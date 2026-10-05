@@ -296,7 +296,6 @@ Tasks:
 - [ ] Optional central server: kiosk inventory, reports, signature status
 - [ ] Centralized distribution of signed updates
 - [ ] Statistics dashboard (devices scanned, detections)
-- [ ] Integration with Mercator (kiosks inventoried in the IT map)
 
 ## Phase 6 — Assurance and compliance
 
