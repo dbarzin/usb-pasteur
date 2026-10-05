@@ -5,10 +5,14 @@ from __future__ import annotations
 import contextlib
 import curses
 import os
+import textwrap
 from collections import deque
 
 from usb_pasteur.device import UsbDevice
+from usb_pasteur.logs import get_logger, log_event
 from usb_pasteur.text import human_size, printable
+
+logger = get_logger("display")
 
 LOGO = (
     "░█░█░█▀▀░█▀▄░░░░░█▀█░█▀█░█▀▀░▀█▀░█▀▀░█░█░█▀▄",
@@ -32,6 +36,9 @@ class CursesDisplay:
         self.log_win: curses.window | None = None
         self.logs: deque[str] = deque()
         self._percent = -1
+        # What is shown, to draw it again when the screen size changes
+        self.device: UsbDevice | None = None
+        self.usage: tuple[int, int] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -51,6 +58,7 @@ class CursesDisplay:
         # standard screen, which would then blank them unless already drawn
         self.screen.refresh()
         self._layout()
+        log_event(logger, "display_started", lines=curses.LINES, cols=curses.COLS)
 
     def stop(self) -> None:
         if self.screen is not None:
@@ -61,6 +69,33 @@ class CursesDisplay:
             curses.endwin()
             self.screen = None
 
+    def _resized(self, key_resize: bool = False) -> bool:
+        """Follow a change of the console size; return True when it changed.
+
+        The graphics driver may change the resolution after the kiosk started
+        (the firmware framebuffer, then the native mode of the screen): the
+        interface is drawn again for the new size, else part of it would be
+        off the screen. key_resize: getch() returned KEY_RESIZE, ncurses has
+        already resized its screen (resizeterm() would queue another one).
+        """
+        if self.screen is None:
+            return False
+        try:
+            size = os.get_terminal_size(1)
+        except OSError:
+            return False
+        if key_resize:
+            curses.update_lines_cols()
+        elif (size.lines, size.columns) == (curses.LINES, curses.COLS):
+            return False
+        else:
+            curses.resizeterm(size.lines, size.columns)
+        self.screen.clear()
+        self.screen.refresh()
+        self._layout()
+        log_event(logger, "display_resized", lines=curses.LINES, cols=curses.COLS)
+        return True
+
     def _layout(self) -> None:
         lines, cols = curses.LINES, curses.COLS
         title = curses.newwin(_TITLE_HEIGHT, cols, 0, 0)
@@ -69,29 +104,52 @@ class CursesDisplay:
             _addstr(title, i + 1, col, line, curses.color_pair(_RED))
         title.refresh()
 
-        self.status_win = curses.newwin(_STATUS_HEIGHT, cols, _TITLE_HEIGHT, 0)
-        self.show_device(None)
-
         top = _TITLE_HEIGHT + _STATUS_HEIGHT
         self.progress_win = curses.newwin(_PROGRESS_HEIGHT, cols, top, 0)
-        self.progress(0)
+        percent, self._percent = max(0, self._percent), -1
+        self._draw_progress(percent)
+
+        self.status_win = curses.newwin(_STATUS_HEIGHT, cols, _TITLE_HEIGHT, 0)
+        self._draw_device()
 
         top += _PROGRESS_HEIGHT
         self.log_win = curses.newwin(max(3, lines - top), cols, top, 0)
-        self.logs = deque(maxlen=max(1, lines - top - 2))
+        # The latest lines are kept, as many as the window shows
+        self.logs = deque(self.logs, maxlen=max(1, lines - top - 2))
         self._draw_logs()
 
     # -- Display protocol --------------------------------------------------
 
     def message(self, text: str) -> None:
-        self.logs.append(printable(text))
+        self._resized()
+        # Long lines (file names) are wrapped, never cut at the screen edge
+        width = max(10, curses.COLS - 2)
+        for line in textwrap.wrap(printable(text), width, break_on_hyphens=False) or [""]:
+            self.logs.append(line)
         self._draw_logs()
 
     def show_device(self, device: UsbDevice | None) -> None:
+        self.device = device
+        self.usage = None
+        if not self._resized():
+            self._draw_device()
+        if device is None:
+            self.progress(0)
+
+    def show_usage(self, size: int, used: int) -> None:
+        self.usage = (size, used)
+        if not self._resized():
+            self._draw_device()
+
+    def progress(self, percent: int) -> None:
+        if not self._resized():
+            self._draw_progress(percent)
+
+    def _draw_device(self) -> None:
         win = self.status_win
         if win is None:
             return
-        d = device or UsbDevice(node="")
+        d = self.device or UsbDevice(node="")
         win.erase()
         win.border(0)
         _addstr(win, 0, 1, " USB device ")
@@ -103,20 +161,13 @@ class CursesDisplay:
         _addstr(win, 1, half, f"Type   : {printable(d.fs_type)}", blue)
         _addstr(win, 2, half, f"Model  : {printable(d.vendor)} {printable(d.model)}", blue)
         _addstr(win, 3, half, f"Serial : {printable(d.serial)}", blue)
-        win.refresh()
-        if device is None:
-            self.progress(0)
-
-    def show_usage(self, size: int, used: int) -> None:
-        win = self.status_win
-        if win is None:
-            return
-        blue = curses.color_pair(_BLUE)
-        _addstr(win, 2, 1, f"Size   : {human_size(size)}", blue)
-        _addstr(win, 3, 1, f"Used   : {human_size(used)}", blue)
+        if self.usage is not None:
+            size, used = self.usage
+            _addstr(win, 2, 1, f"Size   : {human_size(size)}", blue)
+            _addstr(win, 3, 1, f"Used   : {human_size(used)}", blue)
         win.refresh()
 
-    def progress(self, percent: int) -> None:
+    def _draw_progress(self, percent: int) -> None:
         win = self.progress_win
         if win is None or percent == self._percent:
             return
@@ -137,9 +188,16 @@ class CursesDisplay:
         self.screen.timeout(200)
         mice = _Mice()
         try:
-            # getch waits up to 200 ms, which paces the loop
-            while self.screen.getch() == -1 and not mice.released():
-                pass
+            # getch waits up to 200 ms, which paces the loop; a change of the
+            # screen size is not a key press
+            while True:
+                key = self.screen.getch()
+                if key == curses.KEY_RESIZE:
+                    self._resized(key_resize=True)
+                elif self._resized():
+                    pass
+                elif key != -1 or mice.released():
+                    break
         finally:
             self.screen.timeout(-1)
             mice.close()
