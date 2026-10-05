@@ -197,12 +197,12 @@ image/vm.sh test      # end-to-end test in a virtual machine
 
 - **Computer**: refurbished Lenovo ThinkCentre (x86_64)
 - **Memory**: 2 GB minimum, the size of the test virtual machine (clamd alone uses about 1 GB with the full ClamAV databases)
-- **Display**: 7-inch touchscreen
+- **Display**: Waveshare 7-inch HDMI LCD (C), capacitive touchscreen, 1024x600 (USB touch controller `0eef:0005`)
 - **Enclosure**: 3D-printed
 
 Tasks:
 
-- [ ] List of validated ThinkCentre models (CPU, RAM, USB ports, Secure Boot support)
+- [ ] List of validated ThinkCentre models (CPU, RAM, USB ports, Secure Boot support); first one: ThinkCentre M720q (10T7, Core i5-9400T, Intel UHD 630)
 - [ ] Touchscreen model selection, driver support and calibration
 - [ ] Enclosure design published in the repository (source files + STL), under an open hardware license
 - [ ] Assembly guide (bill of materials, printing settings, wiring, USB port layout for the user)

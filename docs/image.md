@@ -135,6 +135,18 @@ Secure Boot anyway), power off the machine or reboot into the firmware
 setup. The ESP is not part of the image updates: this file stays as
 installed.
 
+## Screen
+
+The kiosk draws its interface on the first console (`tty1`), in text mode
+on the framebuffer of the graphics driver: 128x37 characters on the screen
+of the reference hardware, a Waveshare 7-inch HDMI LCD (1024x600). The
+firmware of the ThinkCentre starts in 1024x768, and the Intel driver keeps
+that mode: the bottom of the interface would be off the screen. The kernel
+command line therefore sets the mode of the screen, `video=1024x600M@60`
+(CVT timings, as Waveshare documents them); with another screen, remove it
+from `image/mkosi.conf`. The kiosk logs the size it draws for
+(`display_started`), and draws again when it changes.
+
 ## USB devices
 
 A kiosk must only use USB storage devices: a key that is also a keyboard
