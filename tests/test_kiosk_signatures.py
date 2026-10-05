@@ -221,4 +221,4 @@ def test_image_version_is_shown_at_start(
     # On an image: its version, the date and time of its build
     monkeypatch.setattr("usb_pasteur.imageupdate.running_version", lambda: 20261005134734)
     run(config, display, {KEY_A: data_key(tmp_path, "data")})
-    assert display.messages[0] == "USB-Pasteur 20261005134734"
+    assert display.messages[0] == "USB-Pasteur 20261005134734 of 2026-10-05 13:47 UTC"

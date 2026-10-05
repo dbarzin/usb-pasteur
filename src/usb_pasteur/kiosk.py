@@ -297,7 +297,7 @@ class Kiosk:
         if image_version is None:
             self.display.message(f"USB-Pasteur {__version__} (development)")
         else:
-            self.display.message(f"USB-Pasteur {image_version}")
+            self.display.message(f"USB-Pasteur {image_version}{_build_date(image_version)}")
         if installed is None:
             self.display.message("Signatures: none installed")
         else:
@@ -746,6 +746,15 @@ class Kiosk:
             self.mounter.unmount()
         except DeviceError as ex:
             log_event(logger, "unmount_failed", logging.ERROR, error=str(ex))
+
+
+def _build_date(version: int) -> str:
+    """The date of a version made of the time of its build: " of 2026-10-05 14:13 UTC"."""
+    try:
+        built = datetime.strptime(str(version), "%Y%m%d%H%M%S")
+    except ValueError:
+        return ""
+    return f" of {built:%Y-%m-%d %H:%M} UTC"
 
 
 def _has_folder(root: Path, name: str) -> bool:
