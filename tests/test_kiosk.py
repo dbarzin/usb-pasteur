@@ -130,7 +130,7 @@ def test_fake_scan_banner(
 ) -> None:
     make_kiosk(config, display, DirectoryMounter(tmp_path), [], pool).run()
     # The versions first, then the banner
-    assert display.messages[0] == f"USB-Pasteur {__version__}"
+    assert display.messages[0] == f"USB-Pasteur {__version__} (development)"
     assert display.messages[1] == "Signatures: none installed"
     assert display.messages[2].startswith("FAKE SCAN MODE")
 

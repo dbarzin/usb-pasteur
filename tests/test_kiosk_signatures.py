@@ -211,5 +211,14 @@ def test_versions_are_shown_at_start(
             [config.signatures.keys / "update.pem"])  # fmt: skip
     created = installed_manifest(config.signatures.folder).created  # type: ignore[union-attr]
     run(config, display, {KEY_A: data_key(tmp_path, "data")})
-    assert display.messages[0] == f"USB-Pasteur {__version__}"
+    assert display.messages[0] == f"USB-Pasteur {__version__} (development)"
     assert display.messages[1] == f"Signatures: set 7 of {created:%Y-%m-%d %H:%M} UTC"
+
+
+def test_image_version_is_shown_at_start(
+    config: Config, display: RecordingDisplay, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On an image: its version, the date and time of its build
+    monkeypatch.setattr("usb_pasteur.imageupdate.running_version", lambda: 20261005134734)
+    run(config, display, {KEY_A: data_key(tmp_path, "data")})
+    assert display.messages[0] == "USB-Pasteur 20261005134734"

@@ -292,8 +292,12 @@ class Kiosk:
                 for e in self.scanner.engines
             },
         )
-        system = "" if image_version is None else f", system {image_version}"
-        self.display.message(f"USB-Pasteur {__version__}{system}")
+        # The version of the image (date and time of its build); the version
+        # of the Python package only outside an image (development)
+        if image_version is None:
+            self.display.message(f"USB-Pasteur {__version__} (development)")
+        else:
+            self.display.message(f"USB-Pasteur {image_version}")
         if installed is None:
             self.display.message("Signatures: none installed")
         else:
