@@ -247,9 +247,9 @@ See [docs/signatures.md](docs/signatures.md).
 - [x] Signature verification before loading databases: the installed set is verified at each start, the engines (and clamd) only read it
 - [x] Offline updates from a signed USB device, for air-gapped kiosks
 - [x] Publication: `usb-pasteur-signatures publish` downloads the sources (ClamAV, YARA Forge, MalwareBazaar, Hashlookup) with a cache, checks the set with the kiosk engines, then signs it; container `publish/`
-- [ ] Release signing key of the project, its storage (hardware token) and the publication schedule
 - [x] Online updates through a dedicated channel: image profile `online`, update service as the only user allowed out by the firewall, HTTP(S) and proxy, only the changed files downloaded, new set loaded when the kiosk is idle
 - [x] Online updates from the sources themselves (freshclam, YARA Forge, MalwareBazaar, Hashlookup): the abuse.ch Auth-Key is a systemd credential of the image (`image/credentials.toml`, outside git), the set is signed with a key generated on the kiosk
+- [ ] Release signing key of the project, its storage (hardware token) and the publication schedule
 
 ### Testing in a virtual machine
 
@@ -261,12 +261,12 @@ Tasks:
 - [x] Automated end-to-end test in the virtual machine: insertion through QMP, verdicts of every engine, cleaning confirmed on the kiosk screen, quarantine, report, eject, removal, clean key inserted again
 - [x] Read-only root filesystem, data partition grown to fill the disk, data kept after a reboot
 - [x] OVMF with the image signing keys enrolled: Secure Boot enabled, kernel lockdown, root filesystem on dm-verity; a modified root block cannot be read; firmware trusting another key refuses the image
-- [ ] Software TPM (`swtpm`), once measured boot is used
 - [x] USB key images for every supported filesystem (vfat, exfat, ntfs3, ext4), plus partitioned, unsupported and corrupted filesystems
 - [x] An emulated keyboard (`usb-kbd`) and network adapter (`usb-net`) are blocked by USBGuard: no input device, no network interface
 - [x] No outgoing network outside the update channel
 - [x] A/B update and rollback tested in the virtual machine
 - [x] Run in continuous integration (KVM when nested virtualization is available, TCG emulation otherwise)
+- [ ] Software TPM (`swtpm`), once measured boot is used
 
 ## Phase 3 — Kiosk interface
 
