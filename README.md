@@ -206,7 +206,7 @@ Tasks:
 
 - [x] List of validated ThinkCentre models (CPU, RAM, USB ports, Secure Boot support): ThinkCentre M720q Tiny (10T7, Core i5-9400T, Intel UHD 630)
 - [x] Touchscreen model selection and driver support: Waveshare 7-inch HDMI LCD (C), mode of the screen on the kernel command line, touch controller allowed by USBGuard
-- [ ] Enclosure design published in the repository (source files + STL), under an open hardware license
+- [ ] Enclosure design published in the repository (source files + STL), under an open hardware license: the STL is in [3D/](3D/), under the CERN-OHL-S v2; the source file of the model remains to be added
 - [ ] Assembly guide (bill of materials, printing settings, wiring, USB port layout for the user)
 - [ ] Physical hardening: only the scanning USB ports reachable from the outside, other ports and BIOS access protected
 - [x] BIOS configuration guide (password, boot order locked, Secure Boot with the image key enrolled from setup mode, VT-d, restart after a power failure)
