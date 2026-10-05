@@ -16,7 +16,7 @@ from usb_pasteur.maintenance import FOLDER, REQUEST, MaintenanceError, export, r
 from usb_pasteur.sigsets import main
 
 from .conftest import RecordingDisplay
-from .test_kiosk_signatures import run
+from .test_kiosk_signatures import FILES, run
 from .test_sigsets import make_key, make_set
 
 pytestmark = pytest.mark.skipif(not Path("/usr/bin/openssl").exists(), reason="no openssl")
@@ -109,7 +109,8 @@ def test_kiosk_exports_its_logs_and_does_not_scan(
     run(config, display, {KEY: root}, signatures_error="no signature set", start=False)
     exports = [p for p in (root / FOLDER).iterdir() if p.is_dir() and p.name != "request"]
     assert len(exports) == 1 and (exports[0] / "usb-pasteur.log").exists()
-    assert f"Logs exported to {FOLDER}/{exports[0].name}." in " ".join(display.messages)
+    assert f"Logs exported to {FOLDER}/{exports[0].name}." in display.messages
+    assert "A maintenance device is not scanned. Remove the device." in display.messages
     assert (root / "eicar.com").exists()
     assert display.confirmations == 0
 
@@ -130,3 +131,20 @@ def test_kiosk_refuses_an_old_request(
     run(config, display, {KEY: root}, start=False)
     assert any(m.startswith("Maintenance REFUSED: request of") for m in display.messages)
     assert [p.name for p in folder.iterdir() if p.is_dir()] == ["request"]
+
+
+def test_one_device_exports_the_logs_and_updates_the_signatures(
+    tmp_path: Path, config: Config, display: RecordingDisplay, key: Path, harmless: Path
+) -> None:
+    from usb_pasteur.sigsets import UPDATE_FOLDER, installed_manifest
+
+    root = tmp_path / "device"
+    request(root / FOLDER, key)
+    make_set(root / UPDATE_FOLDER, FILES, 3, key)
+    run(config, display, {KEY: root}, signatures_error="no signature set", start=False)
+    assert any(m.startswith(f"Logs exported to {FOLDER}/") for m in display.messages)
+    assert "Signatures updated: set 3" in display.messages
+    assert installed_manifest(config.signatures.folder).serial == 3  # type: ignore[union-attr]
+    # The export holds the state before the update
+    export = next(p for p in (root / FOLDER).iterdir() if p.is_dir() and p.name != "request")
+    assert "no signature set installed" in (export / "signatures.txt").read_text()

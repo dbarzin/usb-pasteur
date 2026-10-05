@@ -173,6 +173,12 @@ Nothing changes on the kiosk, and the export holds no key, credential or
 scan report. A request signed by another key, too old, for another kiosk
 or modified is refused (`maintenance_refused` in the log).
 
+One key can hold a maintenance request, a signature set
+(`usb-pasteur-signatures/`) and an image update (`usb-pasteur-image/`):
+the kiosk handles them in that order in one insertion, each verified on its
+own; the export shows the kiosk before the updates, and the image update
+comes last as it restarts the kiosk.
+
 ## USB devices
 
 A kiosk must only use USB storage devices: a key that is also a keyboard

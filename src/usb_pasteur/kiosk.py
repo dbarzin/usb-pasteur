@@ -354,10 +354,16 @@ class Kiosk:
             self.display.message(f"Cannot mount device: {ex}")
             return State.ERROR
         root = self.mounter.mount_point
+        # A device may hold a maintenance request, a signature set and an
+        # image update, each verified on its own: all are handled, the image
+        # last as it restarts the kiosk. Such a device is never scanned.
+        not_scanned = ""
         if _has_folder(root, maintenance.FOLDER):
             self._export_logs(self.device)
-            self._release()
-            return State.WAIT
+            not_scanned = "A maintenance device is not scanned. Remove the device."
+        if self.config.signatures.update_from_devices and _has_folder(root, UPDATE_FOLDER):
+            self._update_signatures(root / UPDATE_FOLDER)
+            not_scanned = "A signature update device is not scanned. Remove the device."
         if self.config.updates.image_from_devices and _has_folder(root, IMAGE_FOLDER):
             version = self._update_image(root / IMAGE_FOLDER)
             self.display.message("An image update device is not scanned. Remove the device.")
@@ -367,9 +373,8 @@ class Kiosk:
                 imageupdate.reboot()
                 return State.STOP
             return State.WAIT
-        if self.config.signatures.update_from_devices and _has_folder(root, UPDATE_FOLDER):
-            self._update_signatures(root / UPDATE_FOLDER)
-            self.display.message("A signature update device is not scanned. Remove the device.")
+        if not_scanned:
+            self.display.message(not_scanned)
             self._release()
             return State.WAIT
         if self.signatures_error is not None:
@@ -396,9 +401,7 @@ class Kiosk:
             self.display.message(f"Maintenance REFUSED: {ex}")
             return
         log_event(logger, "logs_exported", folder=target.name, files=count)
-        self.display.message(
-            f"Logs exported to {maintenance.FOLDER}/{target.name}. Remove the device."
-        )
+        self.display.message(f"Logs exported to {maintenance.FOLDER}/{target.name}.")
 
     def _update_image(self, source: Path) -> int | None:
         """Install the image update of the device; return the version to restart on."""
