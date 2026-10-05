@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from usb_pasteur import __version__
 from usb_pasteur.config import Config, parse_config
 from usb_pasteur.device import UsbDevice
 from usb_pasteur.engines import EngineError, EngineSpec
@@ -128,7 +129,10 @@ def test_fake_scan_banner(
     config: Config, display: RecordingDisplay, tmp_path: Path, pool: WorkerPool
 ) -> None:
     make_kiosk(config, display, DirectoryMounter(tmp_path), [], pool).run()
-    assert display.messages[0].startswith("FAKE SCAN MODE")
+    # The versions first, then the banner
+    assert display.messages[0] == f"USB-Pasteur {__version__}"
+    assert display.messages[1] == "Signatures: none installed"
+    assert display.messages[2].startswith("FAKE SCAN MODE")
 
 
 def test_no_engine_without_fake_scan() -> None:
@@ -315,7 +319,7 @@ def test_auto_mount(
     watcher = SystemMountWatcher(["vfat"], mounts=mounts)
     source = ListSource([DeviceEvent(Action.ADD, UsbDevice(str(node), "vfat", "KEY"))])
     Kiosk(config, display, source, pool, watcher).run()
-    assert display.messages[1].startswith("AUTO-MOUNT MODE")
+    assert display.messages[3].startswith("AUTO-MOUNT MODE")
     assert not (usb_tree / "docs" / "eicar.com").exists()
     assert "Device cleaned! You can remove the device." in display.messages
     # Unmounted before the confirmation, mounted again to clean, unmounted, ejected

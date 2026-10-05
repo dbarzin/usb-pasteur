@@ -200,3 +200,16 @@ def test_restart_clamd_never_asks_for_a_password(monkeypatch: pytest.MonkeyPatch
     assert commands == [
         ["/usr/bin/systemctl", "--no-ask-password", "try-restart", "clamav-daemon.service"]
     ]
+
+
+def test_versions_are_shown_at_start(
+    config: Config, display: RecordingDisplay, tmp_path: Path, key: Path
+) -> None:
+    from usb_pasteur import __version__
+
+    install(make_set(tmp_path / "set", FILES, 7, key), config.signatures.folder,
+            [config.signatures.keys / "update.pem"])  # fmt: skip
+    created = installed_manifest(config.signatures.folder).created  # type: ignore[union-attr]
+    run(config, display, {KEY_A: data_key(tmp_path, "data")})
+    assert display.messages[0] == f"USB-Pasteur {__version__}"
+    assert display.messages[1] == f"Signatures: set 7 of {created:%Y-%m-%d %H:%M} UTC"

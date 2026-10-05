@@ -135,6 +135,10 @@ def check_boot(vm: Machine, timeout: float) -> None:
     # The test set is new; its ClamAV database has no date (custom
     # signatures only): logged, not shown
     check("WARNING" not in screen, f"warning on the kiosk screen:\n{screen}")
+    # The versions of the kiosk, of the system and of the signatures
+    system = image_versions()[0]
+    check(f", system {system}" in screen, f"no system version on the screen:\n{screen}")
+    check("Signatures: set 1 of " in screen, f"no signature set on the screen:\n{screen}")
     check(count_events(vm, "signatures_undated") == 1, "undated ClamAV database not logged")
     print(f"kiosk started with engines {', '.join(engines)}, signature set 1 verified")
 

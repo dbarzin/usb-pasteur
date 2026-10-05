@@ -9,7 +9,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from usb_pasteur import imageupdate, maintenance
+from usb_pasteur import __version__, imageupdate, maintenance
 from usb_pasteur.config import Config
 from usb_pasteur.device import DeviceError, Mounter, SystemMountWatcher, UsbDevice
 from usb_pasteur.engines import Engine, EngineError
@@ -274,9 +274,12 @@ class Kiosk:
 
     def on_start(self) -> State:
         installed = installed_manifest(self.config.signatures.folder)
+        image_version = imageupdate.running_version()
         log_event(
             logger,
             "kiosk_started",
+            version=__version__,
+            image_version=image_version,
             ready=self.signatures_error is None,
             signature_set=None if installed is None else installed.serial,
             fake_scan=self.config.kiosk.fake_scan,
@@ -289,6 +292,15 @@ class Kiosk:
                 for e in self.scanner.engines
             },
         )
+        system = "" if image_version is None else f", system {image_version}"
+        self.display.message(f"USB-Pasteur {__version__}{system}")
+        if installed is None:
+            self.display.message("Signatures: none installed")
+        else:
+            created = installed.created.astimezone(UTC)
+            self.display.message(
+                f"Signatures: set {installed.serial} of {created:%Y-%m-%d %H:%M} UTC"
+            )
         if self.config.kiosk.fake_scan:
             self.display.message("FAKE SCAN MODE - for development only, no real detection")
         if self.config.device.auto_mount:
