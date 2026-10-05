@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import contextlib
 import curses
+import fcntl
 import os
+import re
+import struct
+import termios
 import textwrap
 from collections import deque
+from pathlib import Path
 
 from usb_pasteur.device import UsbDevice
 from usb_pasteur.logs import get_logger, log_event
@@ -27,6 +32,46 @@ _MICE = "/dev/input/mice"
 
 _RED, _BLUE, _GREEN = 1, 2, 3
 
+# Mode of the screen on the kernel command line, e.g. video=1024x600M@60 or
+# video=HDMI-A-1:1024x600
+_VIDEO = re.compile(r"(?:^|\s)video=(?:[\w-]+:)?(\d+)x(\d+)")
+# Font of the Linux console (fbcon) for these resolutions
+_FONT_WIDTH, _FONT_HEIGHT = 8, 16
+
+
+def screen_size(cmdline: str) -> tuple[int, int] | None:
+    """Lines and columns of the screen set on the kernel command line."""
+    match = _VIDEO.search(cmdline)
+    if match is None:
+        return None
+    return int(match[2]) // _FONT_HEIGHT, int(match[1]) // _FONT_WIDTH
+
+
+def fit_console(fd: int = 1, cmdline: Path = Path("/proc/cmdline")) -> tuple[int, int] | None:
+    """Shrink the console to the screen of the kernel command line (video=).
+
+    The Intel driver keeps the framebuffer of the firmware (1024x768 on the
+    ThinkCentre) when it is large enough for the mode of the screen
+    (1024x600): the console is then taller than the screen. On a Linux
+    console, resizing the terminal resizes the console itself, drawn in the
+    visible part. Return the new size, or None when nothing changed.
+    """
+    try:
+        wanted = screen_size(cmdline.read_text())
+        size = os.get_terminal_size(fd)
+    except OSError:
+        return None
+    if wanted is None:
+        return None
+    lines, cols = min(size.lines, wanted[0]), min(size.columns, wanted[1])
+    if (lines, cols) == (size.lines, size.columns):
+        return None
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", lines, cols, 0, 0))
+    except OSError:
+        return None
+    return lines, cols
+
 
 class CursesDisplay:
     def __init__(self) -> None:
@@ -43,6 +88,7 @@ class CursesDisplay:
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
+        fitted = fit_console()
         self.screen = curses.initscr()
         curses.noecho()
         curses.cbreak()
@@ -58,7 +104,13 @@ class CursesDisplay:
         # standard screen, which would then blank them unless already drawn
         self.screen.refresh()
         self._layout()
-        log_event(logger, "display_started", lines=curses.LINES, cols=curses.COLS)
+        log_event(
+            logger,
+            "display_started",
+            lines=curses.LINES,
+            cols=curses.COLS,
+            fitted=fitted is not None,
+        )
 
     def stop(self) -> None:
         if self.screen is not None:
@@ -80,6 +132,8 @@ class CursesDisplay:
         """
         if self.screen is None:
             return False
+        # The kernel resized the console (graphics driver): fit it again
+        fit_console()
         try:
             size = os.get_terminal_size(1)
         except OSError:

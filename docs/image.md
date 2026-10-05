@@ -143,9 +143,13 @@ of the reference hardware, a Waveshare 7-inch HDMI LCD (1024x600). The
 firmware of the ThinkCentre starts in 1024x768, and the Intel driver keeps
 that mode: the bottom of the interface would be off the screen. The kernel
 command line therefore sets the mode of the screen, `video=1024x600M@60`
-(CVT timings, as Waveshare documents them); with another screen, remove it
-from `image/mkosi.conf`. The kiosk logs the size it draws for
-(`display_started`), and draws again when it changes.
+(CVT timings, as Waveshare documents them); with another screen, change it
+in `image/mkosi.conf`. The Intel driver still keeps the framebuffer of the
+firmware, large enough for that mode: the console stays 1024x768, 48 lines.
+The kiosk therefore shrinks the console to the screen of `video=` (8x16
+font: 37 lines, 128 columns), drawn in its visible part, and does it again
+whenever the kernel resizes the console. It logs the size it draws for
+(`display_started`, `display_resized`).
 
 ## USB devices
 
