@@ -44,6 +44,10 @@ disable systemd-sysupdate-reboot.*
 disable systemd-sysext.*
 disable systemd-confext.*
 
+# No TPM PCR policy: the kiosk has no measured boot yet (on the ThinkCentre,
+# with its TPM, these units fail at every boot)
+disable systemd-pcrlock-*
+
 # Not used on the kiosk
 disable clamav-clamonacc.service
 disable usbguard-dbus.service

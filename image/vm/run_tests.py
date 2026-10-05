@@ -367,7 +367,8 @@ def check_hardening(vm: Machine) -> None:
     # Image updates restart the kiosk when it is idle, never systemd-sysupdate;
     # no system or configuration extension merged from /var
     for unit in ("systemd-sysupdate.timer", "systemd-sysupdate-reboot.timer",
-                 "systemd-sysext.service", "systemd-confext.service"):  # fmt: skip
+                 "systemd-sysext.service", "systemd-confext.service",
+                 "systemd-pcrlock-make-policy.service"):  # fmt: skip
         state = vm.shell.run(f"systemctl is-enabled {unit} || true").strip()
         check(state != "enabled", f"{unit} is enabled")
     # No login prompt on the screens of the kiosk (the test image has a
