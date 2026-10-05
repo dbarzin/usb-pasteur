@@ -484,16 +484,19 @@ def build(
     serial: int | None = None,
     created: datetime | None = None,
     content: str = CONTENT_SIGNATURES,
+    only: Sequence[str] | None = None,
 ) -> Manifest:
     """Write the manifest of the files of folder (to be signed with sign()).
 
     The source, version and date of a file come from the manifest.json of its
-    folder when there is one (usb_pasteur.publish writes them).
+    folder when there is one (usb_pasteur.publish writes them). only: these
+    files of the folder, not all of them.
     """
     created = created or datetime.now(UTC).replace(microsecond=0)
     serial = serial or int(created.strftime("%Y%m%d%H%M%S"))
     entries = []
-    for path in sorted(folder.rglob("*")):
+    paths = sorted(folder.rglob("*")) if only is None else [folder / p for p in sorted(only)]
+    for path in paths:
         rel = path.relative_to(folder).as_posix()
         if rel in (MANIFEST, SIGNATURE) or (path.is_dir() and not path.is_symlink()):
             continue
@@ -569,6 +572,15 @@ def main(argv: list[str] | None = None) -> int:
                 help="with --staged: a kiosk that downloads the signatures from their"
                 " sources signs the staged set with its own key",
             )
+    p_maintenance = sub.add_parser(
+        "maintenance",
+        help="write a signed maintenance request: the kiosk exports its logs to the device",
+    )
+    p_maintenance.add_argument(
+        "folder", type=Path, help="usb-pasteur-maintenance folder, at the root of a USB key"
+    )
+    p_maintenance.add_argument("--key", type=Path, required=True, help="update key (PEM)")
+    p_maintenance.add_argument("--kiosk", default="", help="only this kiosk (kiosk.name)")
     p_download = sub.add_parser(
         "download",
         help="build a set from the sources (updates.sources), or download the published"
@@ -583,6 +595,19 @@ def main(argv: list[str] | None = None) -> int:
         return _publish(args)
     if args.command == "download":
         return _download(args)
+    if args.command == "maintenance":
+        from usb_pasteur import maintenance
+
+        try:
+            request = maintenance.request(args.folder, args.key, args.kiosk)
+        except (SignatureSetError, OSError, subprocess.CalledProcessError) as ex:
+            print(f"usb-pasteur-signatures: {ex}", file=sys.stderr)
+            return 1
+        print(
+            f"maintenance request of {request.created:%Y-%m-%d} in {args.folder}: valid "
+            f"{maintenance.VALID_DAYS} days, for {args.kiosk or 'any kiosk'}"
+        )
+        return 0
     if args.command == "install" and args.staged:
         return _install_staged(args)
     try:

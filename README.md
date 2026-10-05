@@ -221,7 +221,8 @@ Tasks:
 ### Hardening
 
 - [x] No interactive account by default, no SSH: no `login` program, no root password, no login console, Ctrl-Alt-Del masked
-- [ ] Maintenance mode (explicitly enabled SSH or console)
+- [x] Maintenance device: a USB key with a request signed with the update key (valid 7 days) brings back the logs of the kiosk, without login or network access
+- [ ] Maintenance console or SSH, if the logs are not enough
 - [x] Hardened kernel settings (`sysctl`, `lockdown=confidentiality`, memory initialization, IOMMU, unused modules removed)
 - [x] `nftables` firewall: deny all by default
 - [x] **USBGuard**: only mass-storage devices (and hubs) are allowed (BadUSB protection), no device is authorized before USBGuard starts (`usbcore.authorized_default=0`)

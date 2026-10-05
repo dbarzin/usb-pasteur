@@ -947,6 +947,29 @@ def check_refused_keys(vm: Machine, workdir: Path) -> None:
     print(f"corrupted-vfat: not verified, {keys.UNREADABLE} unreadable")
 
 
+def check_maintenance(vm: Machine, workdir: Path) -> None:
+    step("maintenance device: the kiosk exports its logs")
+    from usb_pasteur import maintenance
+
+    content = workdir / "maintenance"
+    maintenance.request(content / maintenance.FOLDER, UPDATE_KEY)
+    image = workdir / "maintenance.img"
+    make_key(image, content)
+    log = KioskLog(vm)
+    vm.insert_key(image)
+    exported = log.wait("logs_exported")
+    log.wait("device_ejected")
+    vm.remove_key()
+    log.wait("device_removed")
+    files = read_key(image)
+    folder = f"{maintenance.FOLDER}/{exported['folder']}"
+    for name in ("journal.txt", "kernel.txt", "usb-pasteur.log", "usb-devices.txt",
+                 "hardware.txt", "signatures.txt", "services.txt"):  # fmt: skip
+        check(f"{folder}/{name}" in files, f"{name} not exported: {files}")
+    check(not any("credstore" in f or f.endswith(".key") for f in files), f"secrets: {files}")
+    print(f"{exported['files']} files exported to {folder}")
+
+
 def check_clean_key(vm: Machine, key: Path) -> None:
     step("insert the cleaned key again")
     vm.insert_key(key)
@@ -1004,6 +1027,7 @@ def main(argv: list[str] | None = None) -> int:
                 plug_touchscreen(vm)
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
+                check_maintenance(vm, workdir)
                 check_filesystem_keys(vm, workdir)
                 check_refused_keys(vm, workdir)
                 check_signature_update(vm, workdir)

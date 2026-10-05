@@ -9,7 +9,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from usb_pasteur import imageupdate
+from usb_pasteur import imageupdate, maintenance
 from usb_pasteur.config import Config
 from usb_pasteur.device import DeviceError, Mounter, SystemMountWatcher, UsbDevice
 from usb_pasteur.engines import Engine, EngineError
@@ -354,6 +354,10 @@ class Kiosk:
             self.display.message(f"Cannot mount device: {ex}")
             return State.ERROR
         root = self.mounter.mount_point
+        if _has_folder(root, maintenance.FOLDER):
+            self._export_logs(self.device)
+            self._release()
+            return State.WAIT
         if self.config.updates.image_from_devices and _has_folder(root, IMAGE_FOLDER):
             version = self._update_image(root / IMAGE_FOLDER)
             self.display.message("An image update device is not scanned. Remove the device.")
@@ -374,6 +378,27 @@ class Kiosk:
             self._release()
             return State.WAIT
         return State.SCAN
+
+    def _export_logs(self, device: UsbDevice) -> None:
+        """Write the logs of the kiosk to a maintenance device (signed request)."""
+        folder = self.mounter.mount_point / maintenance.FOLDER
+        self.display.message("Maintenance device: verifying the request...")
+        try:
+            maintenance.verify(folder, self.config)
+            # Read-write to write the logs: verified again, as mounted now
+            self.mounter.unmount()
+            self.mounter.mount(device, read_only=False)
+            maintenance.verify(folder, self.config)
+            self.display.message("Exporting the logs...")
+            target, count = maintenance.export(folder, self.config)
+        except (maintenance.MaintenanceError, DeviceError, OSError) as ex:
+            log_event(logger, "maintenance_refused", logging.WARNING, reason=str(ex))
+            self.display.message(f"Maintenance REFUSED: {ex}")
+            return
+        log_event(logger, "logs_exported", folder=target.name, files=count)
+        self.display.message(
+            f"Logs exported to {maintenance.FOLDER}/{target.name}. Remove the device."
+        )
 
     def _update_image(self, source: Path) -> int | None:
         """Install the image update of the device; return the version to restart on."""

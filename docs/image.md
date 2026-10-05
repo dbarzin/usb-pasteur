@@ -151,6 +151,28 @@ font: 37 lines, 128 columns), drawn in its visible part, and does it again
 whenever the kernel resizes the console. It logs the size it draws for
 (`display_started`, `display_resized`).
 
+## Maintenance device
+
+A kiosk has no login and accepts no connection: to diagnose it without
+taking its disk out, a **maintenance device** brings its logs back. On the
+computer that holds the update key, with a USB key mounted:
+
+```sh
+image/maintenance-key.sh /media/$USER/KEY            # any kiosk
+image/maintenance-key.sh /media/$USER/KEY kiosk-1    # only kiosk.name = kiosk-1
+```
+
+writes `usb-pasteur-maintenance/` on the key: a request signed with the
+update key, valid 7 days. Inserted into the kiosk, even one without
+signatures, the key is not scanned: the kiosk verifies the request, writes
+its logs to `usb-pasteur-maintenance/<kiosk>-<date>/` (journal of the boot
+and of the previous one, kernel, services, logs of the kiosk and of
+USBGuard, USB devices and rules, disks, boot entries, hardware and screens,
+installed signature set) and ejects the key (`src/usb_pasteur/maintenance.py`).
+Nothing changes on the kiosk, and the export holds no key, credential or
+scan report. A request signed by another key, too old, for another kiosk
+or modified is refused (`maintenance_refused` in the log).
+
 ## USB devices
 
 A kiosk must only use USB storage devices: a key that is also a keyboard
