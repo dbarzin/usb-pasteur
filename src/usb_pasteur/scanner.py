@@ -104,7 +104,11 @@ class Scanner:
             size=result.size,
             verdict=result.verdict.value,
             detail=result.detail,
-            engines={r.engine: [r.verdict.value, r.detail] for r in result.results},
+            # Verdict, detail and time spent in each engine (seconds), as
+            # measured by its worker: the file duration also counts the waits
+            engines={
+                r.engine: [r.verdict.value, r.detail, round(r.duration, 3)] for r in result.results
+            },
             duration=round(result.duration, 3),
         )
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from pathlib import Path
+
+import pytest
 
 from usb_pasteur.config import LimitsConfig
 from usb_pasteur.engines import EngineSpec, Verdict
@@ -83,3 +86,16 @@ def test_missing_root(tmp_path: Path, fake_pool: WorkerPool) -> None:
     assert summary.files == []
     assert not summary.complete
     assert "cannot read the device" in summary.incomplete_reasons[0]
+
+
+def test_engine_durations_are_logged(
+    usb_tree: Path, fake_pool: WorkerPool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO):
+        Scanner(fake_pool, LIMITS).scan_tree(usb_tree)
+    scanned = [r.fields for r in caplog.records if r.getMessage() == "file_scanned"]  # type: ignore[attr-defined]
+    assert scanned
+    for fields in scanned:
+        for verdict, _, duration in fields["engines"].values():
+            assert verdict in ("clean", "malicious")
+            assert isinstance(duration, float) and duration >= 0
