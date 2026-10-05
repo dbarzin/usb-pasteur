@@ -112,14 +112,14 @@ def test_slot_partitions(tmp_path: Path) -> None:
         for name, uuid in (
             ("usb-pasteur_4", UUIDS["root"]),
             ("usb-pasteur_4_verity", UUIDS["verity"]),
-            ("usb-pasteur_4_verity_sig", UUIDS["verity-sig"]),
+            ("usb-pasteur_4_veritysig", UUIDS["verity-sig"]),
             ("_empty", "11111111-2222-3333-4444-555555555555"),
         )
     )
     subprocess.run(["/usr/sbin/sfdisk", "-q", str(image)], input=table, text=True, check=True)
     assert slot_partitions(image) == (
         4,
-        {"": UUIDS["root"], "_verity": UUIDS["verity"], "_verity_sig": UUIDS["verity-sig"]},
+        {"": UUIDS["root"], "_verity": UUIDS["verity"], "_veritysig": UUIDS["verity-sig"]},
     )
 
 

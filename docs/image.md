@@ -59,9 +59,11 @@ The disk image has two system slots (A/B updates) and a data partition:
 | root, root-verity, root-verity-sig, slot B (`_empty`) | same sizes | the next version (A/B updates) |
 | data (`usb-pasteur-data`) | ext4, 1 GB in the image | `/var`: scan reports, quarantine, logs, signed signature sets (clamd reads its databases there) |
 
-The version of the image is in `image/mkosi.version` (`--image-version=N`
-overrides it): it is in `/etc/os-release` (`IMAGE_VERSION`), in the labels of
-its partitions and in the name of its UKI.
+The version of the image is the date and time of its build, UTC, like the
+serial of a signature set: `20261005143700` (`image/build.sh` sets it,
+`--image-version=N` overrides it). It is in `/etc/os-release`
+(`IMAGE_VERSION`), in the labels of its partitions (`usb-pasteur_<version>`,
+`_verity`, `_veritysig`: 36 characters at most) and in the name of its UKI.
 
 The root filesystem is read-only by design (EROFS cannot be written at all):
 the system and its configuration only change with a new image. Everything
@@ -315,19 +317,20 @@ filesystem: add its module there.
 The system is updated as a whole, never file by file
 (`src/usb_pasteur/imageupdate.py`, `image/mkosi.extra/usr/lib/sysupdate.d/`).
 
-- **Building an update.** Build the new version, then package it:
+- **Building an update.** Build a new version (its version is the time of
+  the build: newer than the running one), then package it:
 
   ```sh
-  image/build.sh --image-version=2
-  image/package-update.sh image/mkosi.output/usb-pasteur.raw update-2 image/update.key
+  image/build.sh
+  image/package-update.sh image/mkosi.output/usb-pasteur.raw update image/update.key
   ```
 
-  `update-2/` holds the partitions of slot A of the new image (compressed
+  `update/` holds the partitions of slot A of the new image (compressed
   with xz, the format that `systemd-sysupdate` of Debian 13 decompresses),
   named with their UUID, the UKI, and a manifest signed with the update key
   (the format of the signature sets, content `image`, serial = version).
   About 215 MB, of which 40 MB for the UKI.
-- **Installing it.** Copy `update-2/` as `usb-pasteur-image/` at the root of a
+- **Installing it.** Copy `update/` as `usb-pasteur-image/` at the root of a
   USB key and insert it into the kiosk (`updates.image_from_devices`). The
   kiosk verifies the signature, that the version is newer than the running
   one and every file, copies them to `/var/lib/usb-pasteur-image`, then

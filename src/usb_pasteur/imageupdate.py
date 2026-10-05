@@ -62,7 +62,7 @@ NAME = "usb-pasteur"
 PARTITIONS = (
     ("root-x86-64", "", "root"),
     ("root-x86-64-verity", "_verity", "verity"),
-    ("root-x86-64-verity-sig", "_verity_sig", "verity-sig"),
+    ("root-x86-64-verity-sig", "_veritysig", "verity-sig"),
 )
 _FILE = re.compile(
     rf"{FILES}/{NAME}_(?P<version>\d+)"

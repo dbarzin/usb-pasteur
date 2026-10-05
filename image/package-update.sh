@@ -2,7 +2,7 @@
 # Build a signed image update (A/B, docs/image.md) from a built image, in the
 # build container:
 #   image/package-update.sh IMAGE OUTPUT KEY
-# IMAGE: disk image built by image/build.sh --image-version=N (with its split
+# IMAGE: disk image built by image/build.sh (with its split
 # partitions and UKI next to it). OUTPUT: folder of the update (replaced), to
 # copy as usb-pasteur-image at the root of an image update device. KEY: the
 # update key (Ed25519, PEM).

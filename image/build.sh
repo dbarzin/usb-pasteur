@@ -3,7 +3,9 @@
 #   image/build.sh                 production image
 #   image/build.sh --profile test  test image (test signatures, root shell on hvc0)
 # Other arguments are passed to mkosi. An existing image is replaced. The
-# image is written to image/mkosi.output/.
+# image is written to image/mkosi.output/. Its version is the date and time
+# of the build (UTC, YYYYMMDDHHMMSS, like the serial of a signature set),
+# unless --image-version=N is given: a kiosk only installs a newer version.
 # The image is signed with image/mkosi.key and image/mkosi.crt, and trusts the
 # signature sets signed with image/update.key (public key image/update.pem):
 # development key pairs are generated when they do not exist (never use them
@@ -11,6 +13,10 @@
 set -eu
 
 cd "$(dirname "$0")"
+case " $* " in
+*" --image-version="*) ;;
+*) set -- --image-version="$(date -u +%Y%m%d%H%M%S)" "$@" ;;
+esac
 docker build -q -t usb-pasteur-builder . >/dev/null
 mkdir -p mkosi.output
 # Privileged: mkosi creates namespaces and mounts to build the image. Its

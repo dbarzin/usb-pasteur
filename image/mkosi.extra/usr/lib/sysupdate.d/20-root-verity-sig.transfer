@@ -14,7 +14,7 @@ MatchPattern=usb-pasteur_@v_@u.verity-sig.raw.xz
 [Target]
 Type=partition
 Path=auto
-MatchPattern=usb-pasteur_@v_verity_sig
+MatchPattern=usb-pasteur_@v_veritysig
 MatchPartitionType=root-verity-sig
 PartitionFlags=0
 ReadOnly=1
