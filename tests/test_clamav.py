@@ -172,6 +172,7 @@ def test_spec_from_config() -> None:
                 "hashlookup": {"enabled": False},
                 "clamav": {"mode": "instream", "suspicious_names": []},
                 "yara": {"enabled": False},
+                "heuristics": {"enabled": False},
             }
         }
     )

@@ -416,7 +416,7 @@ signing certificate is enrolled (Secure Boot enabled), and an empty USB 3
 controller. It plays the whole user workflow, through QMP and the shell on
 the virtio console:
 
-1. the kiosk starts with its four engines and the signature set 1, verified,
+1. the kiosk starts with its five engines and the signature set 1, verified,
    and no systemd unit fails;
 2. the scan workers (one engine each) run in their sandbox (user,
    capabilities, `no_new_privs`, seccomp, network namespace, no device or

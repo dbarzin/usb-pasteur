@@ -138,7 +138,9 @@ class ClamavConfig:
     # Must not exceed MaxFileSize, MaxScanSize and StreamMaxLength of clamd.conf
     max_file_size: int = 100 * 1024**2
     suspicious_names: tuple[str, ...] = ("PUA.*", "Heuristics.*")
-    error_names: tuple[str, ...] = ("Heuristics.Limits.Exceeded.*",)
+    # Not fully scanned: beyond the limits of clamd, encrypted archive or
+    # document (clamd.conf AlertEncrypted)
+    error_names: tuple[str, ...] = ("Heuristics.Limits.Exceeded.*", "Heuristics.Encrypted.*")
     max_age_days: float | None = None
 
 
@@ -165,11 +167,18 @@ class YaraConfig:
 
 
 @dataclass(frozen=True)
+class HeuristicsConfig:
+    # Structure of the files: PDF with JavaScript, disguised executables
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class EnginesConfig:
     malwarebazaar: MalwareBazaarConfig = field(default_factory=MalwareBazaarConfig)
     hashlookup: HashlookupConfig = field(default_factory=HashlookupConfig)
     clamav: ClamavConfig = field(default_factory=ClamavConfig)
     yara: YaraConfig = field(default_factory=YaraConfig)
+    heuristics: HeuristicsConfig = field(default_factory=HeuristicsConfig)
 
 
 @dataclass(frozen=True)
@@ -529,7 +538,13 @@ def _parse_engines(engines: dict[str, Any]) -> EnginesConfig:
     if yr_cfg.suspicious_score > yr_cfg.malicious_score:
         raise ConfigError(f"{section}.suspicious_score must not exceed malicious_score")
 
-    return EnginesConfig(malwarebazaar=mb_cfg, hashlookup=hl_cfg, clamav=av_cfg, yara=yr_cfg)
+    section = "engines.heuristics"
+    hr = engines.get("heuristics", {})
+    _reject_unknown(hr, {"enabled"}, section)
+    hr_cfg = HeuristicsConfig(enabled=_get(hr, section, "enabled", bool, True))
+    return EnginesConfig(
+        malwarebazaar=mb_cfg, hashlookup=hl_cfg, clamav=av_cfg, yara=yr_cfg, heuristics=hr_cfg
+    )
 
 
 def _rule_sets(table: dict[str, Any], section: str) -> tuple[YaraRuleSet, ...]:

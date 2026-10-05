@@ -127,10 +127,13 @@ timeout = 120.0
 # Must not exceed MaxFileSize, MaxScanSize and StreamMaxLength of clamd.conf:
 # bigger files are reported as errors without being sent (default: 100 MiB)
 max_file_size = 104857600
-# Detection names reported as suspicious instead of malicious
+# Detection names reported as suspicious instead of malicious (documents
+# with macros: Heuristics.OLE2.ContainsMacros, clamd.conf AlertOLE2Macros)
 suspicious_names = ["PUA.*", "Heuristics.*"]
-# Detection names meaning that the file was not fully scanned
-error_names = ["Heuristics.Limits.Exceeded.*"]
+# Detection names meaning that the file was not fully scanned: beyond the
+# limits of clamd (archives too, decompression bombs), encrypted archives and
+# documents (clamd.conf AlertEncrypted)
+error_names = ["Heuristics.Limits.Exceeded.*", "Heuristics.Encrypted.*"]
 
 [engines.yara]
 enabled = true
@@ -158,6 +161,12 @@ malicious_score = 75
 suspicious_score = 40
 default_score = 60
 
+
+[engines.heuristics]
+# Structure of the files, without signatures: PDF with JavaScript or a
+# Launch action, programs disguised as documents (facture.pdf, facture.pdf.exe).
+# Findings are suspicious.
+enabled = true
 [signatures]
 # Warn at startup when a signature database is older than this (in days);
 # each engine can override it with its own max_age_days. A database without

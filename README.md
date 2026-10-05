@@ -280,12 +280,12 @@ Tasks:
 
 ## Phase 4 — Advanced analysis
 
-- [ ] Office documents: `oletools` (olevba, mraptor)
-- [ ] PDF: `pdfid` (JavaScript, automatic actions, embedded files)
-- [ ] Archives: controlled extraction (libarchive / 7-Zip), protection against decompression bombs
-- [ ] Encrypted archives flagged as unscannable
+- [ ] Office documents: `oletools` (olevba, mraptor); documents with macros are already suspicious (ClamAV `AlertOLE2Macros`)
+- [x] PDF: JavaScript and Launch actions are suspicious, automatic actions, embedded files and forms reported (like `pdfid`, `engines.heuristics`)
+- [x] Archives: unpacked and scanned by ClamAV within its limits; beyond them (decompression bombs) the file is not fully scanned
+- [x] Encrypted archives and documents flagged as unscannable (ClamAV `AlertEncrypted`)
 - [ ] Executables: `capa` (optional, can be disabled for performance)
-- [ ] Detection of extension / real type mismatches
+- [x] Detection of programs disguised as documents: extension / real type mismatch, double extension (`engines.heuristics`)
 - [ ] **Content disarm and reconstruction (CDR)** to a trusted device using Dangerzone
 - [ ] Selective copy of clean files only to a second device
 

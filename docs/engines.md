@@ -132,7 +132,23 @@ MaxScanSize 400M
 StreamMaxLength 100M
 ```
 
-The kiosk image also sets `ScanImageFuzzyHash no`: ClamAV would decode every
+The kiosk image also sets:
+
+- `AlertEncrypted yes`: an encrypted archive or document cannot be scanned;
+  ClamAV reports it (`Heuristics.Encrypted.Zip`, `.RAR`, `.PDF`...) and the
+  kiosk counts it as not fully scanned (`error_names`): the device is not
+  verified, the file is not removed;
+- `AlertOLE2Macros yes`: an Office document with macros (VBA, also inside
+  `.docm` or `.xlsm`) is suspicious (`Heuristics.OLE2.ContainsMacros`): with
+  `scan.suspicious = "block"`, it is quarantined and removed like a
+  malicious file; `"warn"` only reports it.
+
+Archives (zip, rar, 7z, tar, cab...) are unpacked and scanned by ClamAV
+itself, within its limits (`MaxScanSize`, `MaxFileSize`, `MaxRecursion`,
+`MaxFiles`): beyond them, a decompression bomb for instance, the file is not
+fully scanned (`AlertExceedsMax`).
+
+`ScanImageFuzzyHash no`: ClamAV would decode every
 image, also those inside a PDF or an Office document, to compare a fuzzy hash
 with a few signatures of known images. It took half the scan time of a
 29 MB PDF of images (41 s, then 19 s); the images are still scanned.
@@ -213,8 +229,28 @@ by YARA.
 `python-magic` (Debian package `python3-magic`) identifies the MIME type and
 description from the first MiB of each file, given as a buffer: libmagic does
 not access the filesystem and does not decompress. The type is recorded in
-the report and used for the YARA `filetype` variable. Detection of extension /
-type mismatches comes with phase 4.
+the report, used for the YARA `filetype` variable and by the heuristics.
+
+### Heuristics
+
+The structure of the files, without signatures
+(`src/usb_pasteur/engines/heuristics.py`, `[engines.heuristics]`); findings
+are suspicious, never malicious:
+
+- **PDF with active content** (like pdfid): JavaScript (`/JavaScript`, `/JS`)
+  or a Launch action (`Heuristics.PDF.JavaScript`, `Heuristics.PDF.Launch`).
+  Names hidden with escapes (`/J#61vaScript`) are decoded. Automatic actions,
+  embedded files and forms (`/OpenAction`, `/AA`, `/EmbeddedFile`,
+  `/RichMedia`, `/XFA`, `/AcroForm`) are counted as facts of the report.
+  Names inside compressed object streams are not seen: ClamAV and YARA look
+  there.
+- **Disguised program**: a program (PE, ELF, Mach-O, MSI, from libmagic)
+  whose extension claims something else (`facture.pdf`:
+  `Heuristics.Executable.Disguised`), or a document extension followed by
+  one that Windows runs (`facture.pdf.exe`, `rapport.docx.js`:
+  `Heuristics.DoubleExtension`).
+
+The heuristics alone detect no malware: ClamAV or YARA-X stays required.
 
 ### Fake engine
 

@@ -126,7 +126,7 @@ def check_boot(vm: Machine, timeout: float) -> None:
     check(started["signature_set"] == 1, f"signature set: {started['signature_set']}")
     engines = sorted(started["engines"])
     check(
-        engines == ["clamav", "hashlookup", "malwarebazaar", "yara"],
+        engines == ["clamav", "hashlookup", "heuristics", "malwarebazaar", "yara"],
         f"unexpected engines: {engines}",
     )
     failed = vm.shell.run("systemctl --failed --no-legend --plain").strip()
@@ -996,6 +996,38 @@ def check_maintenance(vm: Machine, workdir: Path) -> None:
     print(f"{exported['files']} files exported to {folder}")
 
 
+def check_structure_key(vm: Machine, workdir: Path) -> None:
+    step("encrypted archive, PDF with JavaScript")
+    content = workdir / "structure"
+    content.mkdir()
+    (content / "secret.zip").write_bytes(corpus.encrypted_zip())
+    (content / "active.pdf").write_bytes(corpus.ACTIVE_PDF)
+    (content / "readme.txt").write_bytes(b"a clean file\n")
+    image = workdir / "structure.img"
+    make_key(image, content)
+    log = KioskLog(vm)
+    vm.insert_key(image)
+    # The suspicious PDF is removed (scan.suspicious = "block"), the archive is
+    # not: it could not be scanned
+    log.wait("device_ejected", action=vm.press_key, timeout=90)
+    cleaned = log.wait("device_cleaned")
+    check(cleaned["removed"] == 1, f"removed: {cleaned}")
+    files = {f["path"]: f for f in last_report(vm)["files"]}
+    archive = files["secret.zip"]
+    check(archive["verdict"] == "error", f"secret.zip: {archive['verdict']}")
+    clamav = next(e for e in archive["engines"] if e["engine"] == "clamav")
+    check(clamav["detections"] == ["Heuristics.Encrypted.Zip"], f"secret.zip: {clamav}")
+    pdf = next(e for e in files["active.pdf"]["engines"] if e["engine"] == "heuristics")
+    check(pdf["detections"] == ["Heuristics.PDF.JavaScript"], f"active.pdf: {pdf}")
+    check(files["active.pdf"]["verdict"] == "suspicious", f"active.pdf: {files['active.pdf']}")
+    wait_screen(vm, "NOT VERIFIED")
+    vm.remove_key()
+    log.wait("device_removed")
+    left = read_key(image)
+    check(left == ["readme.txt", "secret.zip"], f"files left on the key: {left}")
+    print("secret.zip: not fully scanned (encrypted), kept; active.pdf: suspicious, removed")
+
+
 def check_clean_key(vm: Machine, key: Path) -> None:
     step("insert the cleaned key again")
     vm.insert_key(key)
@@ -1056,6 +1088,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_maintenance(vm, workdir)
                 check_filesystem_keys(vm, workdir)
                 check_refused_keys(vm, workdir)
+                check_structure_key(vm, workdir)
                 check_signature_update(vm, workdir)
                 online_set = check_online_update(vm, workdir)
                 check_usb_policy(vm)

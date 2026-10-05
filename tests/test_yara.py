@@ -270,6 +270,7 @@ def test_spec_from_config(rules_dir: Path) -> None:
                 "malwarebazaar": {"enabled": False},
                 "hashlookup": {"enabled": False},
                 "clamav": {"enabled": False},
+                "heuristics": {"enabled": False},
                 "yara": {"rules": [{"name": "t", "path": str(rules_dir)}], "cache_dir": ""},
             }
         }

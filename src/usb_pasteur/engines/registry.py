@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from usb_pasteur.config import Config
-from usb_pasteur.engines.base import Engine, EngineKind, EngineSpec
+from usb_pasteur.engines.base import Engine, EngineSpec
 from usb_pasteur.engines.clamav import ClamavEngine
 from usb_pasteur.engines.fake import FakeEngine
 from usb_pasteur.engines.hashes import HashlookupEngine, MalwareBazaarEngine
+from usb_pasteur.engines.heuristics import HeuristicsEngine
 from usb_pasteur.engines.yara import YaraEngine
 
 
@@ -54,7 +55,10 @@ def engine_specs(config: Config) -> list[EngineSpec]:
         )
     if engines.yara.enabled:
         specs.append(EngineSpec(YaraEngine.name, YaraEngine, (engines.yara,)))
-    if not any(spec.factory_kind() is EngineKind.CONTENT for spec in specs):
+    if engines.heuristics.enabled:
+        specs.append(EngineSpec(HeuristicsEngine.name, HeuristicsEngine))
+    # The heuristics alone detect no malware
+    if not (engines.clamav.enabled or engines.yara.enabled):
         raise NoEngineError(
             "no content engine is enabled (engines.clamav, engines.yara): "
             "set kiosk.fake_scan = true for development"

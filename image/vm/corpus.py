@@ -49,6 +49,52 @@ KEY: dict[str, tuple[bytes, str]] = {
 }
 
 
+# PDF with JavaScript run at opening: suspicious (engines.heuristics)
+ACTIVE_PDF = (
+    b"%PDF-1.7\n1 0 obj << /Type /Catalog /OpenAction 2 0 R >> endobj\n"
+    b"2 0 obj << /S /JavaScript /JS (app.alert('USB-Pasteur VM test')) >> endobj\n%%EOF\n"
+)
+
+
+def encrypted_zip(name: str = "secret.txt", content: bytes = b"secret document\n") -> bytes:
+    """A zip archive encrypted with a password (ZipCrypto): it cannot be scanned.
+
+    The standard library only reads such archives: written by hand.
+    """
+    import struct
+    import zlib
+
+    keys = [0x12345678, 0x23456789, 0x34567890]
+
+    def crc(value: int, byte: int) -> int:
+        return zlib.crc32(bytes([byte]), value ^ 0xFFFFFFFF) ^ 0xFFFFFFFF
+
+    def update(byte: int) -> None:
+        keys[0] = crc(keys[0], byte)
+        keys[1] = ((keys[1] + (keys[0] & 0xFF)) * 134775813 + 1) & 0xFFFFFFFF
+        keys[2] = crc(keys[2], keys[1] >> 24)
+
+    def encrypt(data: bytes) -> bytes:
+        out = bytearray()
+        for byte in data:
+            t = (keys[2] | 2) & 0xFFFF
+            out.append(byte ^ (((t * (t ^ 1)) >> 8) & 0xFF))
+            update(byte)
+        return bytes(out)
+
+    for byte in b"password":
+        update(byte)
+    checksum = zlib.crc32(content) & 0xFFFFFFFF
+    body = encrypt(bytes(11) + bytes([checksum >> 24])) + encrypt(content)
+    filename = name.encode()
+    sizes = (checksum, len(body), len(content), len(filename))
+    local = struct.pack("<IHHHHHIIIHH", 0x04034B50, 20, 1, 0, 0, 0, *sizes, 0) + filename + body
+    central = struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 20, 20, 1, 0, 0, 0, *sizes,
+                          0, 0, 0, 0, 0, 0) + filename  # fmt: skip
+    end = struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, 1, 1, len(central), len(local), 0)
+    return local + central + end
+
+
 def write_key(folder: Path) -> None:
     for path, (content, _) in KEY.items():
         target = folder / path
