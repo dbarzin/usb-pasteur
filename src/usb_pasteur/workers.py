@@ -85,6 +85,29 @@ ENGINE_GRACE = 5.0
 START_TIMEOUT = 600.0
 
 
+# Memory left to clamd and the system, then needed by each file scanned at the
+# same time (a YARA-X worker holds its compiled rules: about 200 MB with YARA
+# Forge), in MB
+RESERVED_MEMORY = 1536
+MEMORY_PER_WORKER = 256
+MAX_AUTO_WORKERS = 16
+
+
+def auto_workers(meminfo: Path = Path("/proc/meminfo"), cpus: int | None = None) -> int:
+    """Files scanned at the same time: one per CPU, as many as the memory allows."""
+    cpus = cpus or os.cpu_count() or 1
+    try:
+        total = next(
+            int(line.split()[1]) // 1024
+            for line in meminfo.read_text().splitlines()
+            if line.startswith("MemTotal:")
+        )
+    except (OSError, StopIteration, ValueError, IndexError):
+        return min(cpus, 2)
+    by_memory = (total - RESERVED_MEMORY) // MEMORY_PER_WORKER
+    return max(1, min(cpus, by_memory, MAX_AUTO_WORKERS))
+
+
 # -- supervisor side ---------------------------------------------------------------
 
 

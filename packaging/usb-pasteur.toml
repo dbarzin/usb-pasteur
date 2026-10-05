@@ -46,8 +46,10 @@ auto_mount = false
 auto_mount_wait = 15.0
 
 [scan]
-# Number of files scanned in parallel (one worker process each)
-workers = 4
+# Number of files scanned in parallel: "auto" (one per CPU, as many as the
+# memory allows: 1.5 GB for clamd and the system, then 256 MB each, for the
+# YARA rules mostly), or a number
+workers = "auto"
 
 # Maximum time to scan one file with all the engines, in seconds. A worker
 # that exceeds it is killed and the file is reported as an error.

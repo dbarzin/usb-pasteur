@@ -331,9 +331,13 @@ def check_sandbox(vm: Machine) -> None:
         "for p in $(pgrep -f usb_pasteur.worker); do "
         '[ "$(stat -c %U /proc/$p)" = usb-pasteur-scan ] && echo $p; done; true'
     ).split()
-    # One engine per worker: 4 (scan.workers) for ClamAV and for YARA, one
-    # for each hash engine
-    check(len(pids) == 10, f"{len(pids)} sandboxed workers, 10 expected")
+    # One engine per worker: scan.workers ("auto": as many as the CPUs and the
+    # memory allow) for ClamAV and for YARA, one for each hash engine
+    started = wait_event(vm, "workers_started")
+    check(
+        len(pids) == started["workers"] >= 4,
+        f"{len(pids)} sandboxed workers, {started['workers']} started",
+    )
     init_net = vm.shell.run("readlink /proc/1/ns/net").strip()
     for pid in pids:
         status = dict(

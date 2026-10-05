@@ -47,7 +47,7 @@ from usb_pasteur.sigsets import (
 from usb_pasteur.statemachine import State, StateMachine
 from usb_pasteur.text import escape
 from usb_pasteur.ui import Display
-from usb_pasteur.workers import EngineInfo, WorkerPool
+from usb_pasteur.workers import EngineInfo, WorkerPool, auto_workers
 
 logger = get_logger("kiosk")
 
@@ -90,7 +90,7 @@ def build_pool(config: Config) -> WorkerPool:
     return WorkerPool(
         specs,
         pipeline_options(config),
-        config.scan.workers,
+        config.scan.workers or auto_workers(),
         config.scan.file_timeout,
         sandbox=sandbox,
     )

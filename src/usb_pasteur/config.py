@@ -58,7 +58,9 @@ class DeviceConfig:
 
 @dataclass(frozen=True)
 class ScanConfig:
-    workers: int = 4
+    # Files scanned at the same time; 0: automatic (workers.auto_workers: one
+    # per CPU, as many as the memory allows)
+    workers: int = 0
     # Maximum time to scan one file with all engines, in seconds
     file_timeout: float = 300.0
     # "block": suspicious files are quarantined and removed like malicious ones
@@ -305,9 +307,13 @@ def parse_config(data: dict[str, Any]) -> Config:
         },
         "scan",
     )
-    workers = _get(scan, "scan", "workers", int, 4)
-    if not 1 <= workers <= 64:
-        raise ConfigError("scan.workers must be between 1 and 64")
+    value = scan.get("workers", "auto")
+    if value == "auto":
+        workers = 0
+    elif isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 64:
+        workers = value
+    else:
+        raise ConfigError('scan.workers must be "auto" or between 1 and 64')
     fake_delay = _number(scan, "scan", "fake_delay", 0.0)
     if fake_delay < 0:
         raise ConfigError("scan.fake_delay must not be negative")

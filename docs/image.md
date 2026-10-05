@@ -276,8 +276,11 @@ the clamd client...): they are assumed compromisable (`scan.sandbox`,
   (MalwareBazaar, Hashlookup) with the hashes only, then passes the file to
   a worker of each content engine (ClamAV, YARA-X), and combines their
   results itself; a worker only reports the result of its own engine.
-  Content engines have `scan.workers` workers each (4: up to four files at
-  the same time), hash engines one.
+  Content engines have `scan.workers` workers each, hash engines one.
+  `scan.workers = "auto"` (the default) scans one file per CPU at the same
+  time, as many as the memory allows (1.5 GB for clamd and the system, then
+  256 MB each, for the YARA rules mostly): 6 on the ThinkCentre M720q (6
+  cores, 8 GB), 1 or 2 on a computer with 2 GB.
 - **No access to the device**: the kiosk opens each file safely (no link
   followed, the file of the inventory) and passes the open descriptor to the
   workers of the content engines, which never open a file of the device;
@@ -415,7 +418,7 @@ the virtio console:
 
 1. the kiosk starts with its four engines and the signature set 1, verified,
    and no systemd unit fails;
-2. the ten scan workers (one engine each) run in their sandbox (user,
+2. the scan workers (one engine each) run in their sandbox (user,
    capabilities, `no_new_privs`, seccomp, network namespace, no device or
    kiosk data in their file system); Secure Boot is enabled, the kernel is
    locked down and the root filesystem is on dm-verity;

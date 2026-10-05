@@ -31,7 +31,8 @@ Notes for this hardware:
   (the DMC firmware of Coffee Lake): the display works, without its deepest
   power saving states.
 - **Speed**: about 0.5 s per MB for a PDF full of images (ClamAV), much
-  less for other files; four files are scanned at the same time.
+  less for other files (ClamAV takes almost all of it); six files are
+  scanned at the same time, one per core.
 
 A computer or a screen not listed here may need its own settings: the mode
 of its screen, the rule of its touchscreen, the disk controller in the

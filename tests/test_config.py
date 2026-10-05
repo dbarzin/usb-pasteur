@@ -21,7 +21,7 @@ def test_defaults() -> None:
     assert config.kiosk.fake_scan is False
     assert config.kiosk.interface == "curses"
     assert config.device.mount_point == Path("/media/usb-pasteur")
-    assert config.scan.workers == 4
+    assert config.scan.workers == 0  # "auto"
     assert config.scan.suspicious == "block"
     assert config.scan.on_error == "block"
     assert config.limits.max_file_size == 1024**3
@@ -131,7 +131,8 @@ def test_full_config() -> None:
         ({"device": {"auto_mount": "yes"}}, "device.auto_mount must be of type bool"),
         ({"device": {"auto_mount_wait": 0}}, "device.auto_mount_wait must be positive"),
         ({"scan": {"workers": 0}}, "between 1 and 64"),
-        ({"scan": {"workers": True}}, "must be of type int"),
+        ({"scan": {"workers": True}}, "between 1 and 64"),
+        ({"scan": {"workers": "many"}}, "between 1 and 64"),
         ({"scan": {"max_file_size": 1}}, "moved to limits.max_file_size"),
         ({"scan": {"on_error": "ignore"}}, "scan.on_error must be one of: block, warn"),
         ({"scan": {"file_timeout": 0}}, "scan.file_timeout must be positive"),

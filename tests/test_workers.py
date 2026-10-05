@@ -10,7 +10,7 @@ from usb_pasteur.engines import EngineError, EngineKind, EngineSpec, FakeEngine,
 from usb_pasteur.inventory import take_inventory
 from usb_pasteur.pipeline import PipelineOptions
 from usb_pasteur.results import FileResult
-from usb_pasteur.workers import WorkerPool
+from usb_pasteur.workers import WorkerPool, auto_workers
 
 from .conftest import FAKE, started_pool
 from .engines import CompromisedEngine, FailingLoadEngine, MisbehavingEngine, ProbeHashEngine
@@ -209,3 +209,20 @@ def test_hash_engines_never_get_the_file(tmp_path: Path, skip: bool) -> None:
     # A known file: the content engines are skipped only when configured
     assert engines["fake"].verdict is (Verdict.SKIPPED if skip else Verdict.CLEAN)
     assert result.verdict is Verdict.CLEAN
+
+
+@pytest.mark.parametrize(
+    ("memory_mb", "cpus", "workers"),
+    [
+        (8 * 1024, 6, 6),  # ThinkCentre M720q: one per CPU
+        (2 * 1024, 4, 2),  # 2 GB: as many as the memory allows
+        (2 * 1024, 2, 2),  # the test virtual machine
+        (1024, 4, 1),  # never none
+        (64 * 1024, 64, 16),  # at most 16
+    ],
+)
+def test_auto_workers(tmp_path: Path, memory_mb: int, cpus: int, workers: int) -> None:
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(f"MemTotal:       {memory_mb * 1024} kB\nMemFree:  1 kB\n")
+    assert auto_workers(meminfo, cpus) == workers
+    assert auto_workers(tmp_path / "missing", cpus) == min(cpus, 2)
