@@ -30,7 +30,8 @@ def test_defaults() -> None:
     engines = config.engines
     assert engines.malwarebazaar.enabled and engines.hashlookup.enabled
     assert engines.clamav.enabled and engines.yara.enabled
-    assert engines.hashlookup.skip_content_engines is True
+    # Known is not benign: content engines also scan known files by default
+    assert engines.hashlookup.skip_content_engines is False
     assert engines.yara.on_compile_error == "fail"
     assert [r.name for r in engines.yara.rules] == ["yara-forge"]
     assert config.logging.level == "INFO"
@@ -69,7 +70,7 @@ def test_full_config() -> None:
             "signatures": {"max_age_days": 2},
             "engines": {
                 "malwarebazaar": {"enabled": False},
-                "hashlookup": {"skip_content_engines": False, "max_age_days": 30},
+                "hashlookup": {"skip_content_engines": True, "max_age_days": 30},
                 "clamav": {"socket": "/run/test/clamd.sock", "mode": "instream", "error_names": []},
                 "yara": {
                     "rules": [
@@ -91,7 +92,7 @@ def test_full_config() -> None:
     assert config.report.folder == Path("/srv/reports")
     assert config.signatures.max_age_days == 2.0
     assert config.engines.malwarebazaar.enabled is False
-    assert config.engines.hashlookup.skip_content_engines is False
+    assert config.engines.hashlookup.skip_content_engines is True
     assert config.engines.hashlookup.max_age_days == 30.0
     assert config.engines.clamav.mode == "instream"
     assert config.engines.clamav.error_names == ()

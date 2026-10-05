@@ -37,7 +37,7 @@ EngineCallback = Callable[[Engine], None]
 class PipelineOptions:
     # Skip the content engines for files known by a hash engine (hashlookup),
     # unless a hash engine reports them as malicious
-    skip_content_for_known: bool = True
+    skip_content_for_known: bool = False
     # See policy.aggregate_file
     min_malicious_engines: int = 1
 

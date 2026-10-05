@@ -250,7 +250,11 @@ def test_real_engines(fs_type: str, clamd: Path, tmp_path: Path) -> None:
             "device": {"mount_point": str(mount_point), "eject": False},
             "engines": {
                 "malwarebazaar": {"database": str(signatures / "mb.bin")},
-                "hashlookup": {"bloom": str(signatures / "known.bloom")},
+                # Opt-in: content engines skipped on known files
+                "hashlookup": {
+                    "bloom": str(signatures / "known.bloom"),
+                    "skip_content_engines": True,
+                },
                 "clamav": {"socket": str(clamd)},
                 "yara": {
                     "rules": [{"name": "e2e", "path": str(signatures / "rules.yar")}],

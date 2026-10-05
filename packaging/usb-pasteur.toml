@@ -105,8 +105,10 @@ database = "/var/lib/usb-pasteur-signatures/current/malwarebazaar/malwarebazaar.
 # (about 1 in 10,000): see docs/engines.md.
 enabled = true
 bloom = "/var/lib/usb-pasteur-signatures/current/hashlookup/hashlookup-full.bloom"
-# Do not run ClamAV and YARA on known files (malicious hashes are always checked)
-skip_content_engines = true
+# Do not run ClamAV and YARA on known files (malicious hashes are always
+# checked). Off: known is not benign, the CIRCL filter also lists the EICAR
+# test file, tools and malware; on only saves time on software devices
+skip_content_engines = false
 # The filter is published monthly
 max_age_days = 45.0
 

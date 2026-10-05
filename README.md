@@ -319,7 +319,7 @@ Tasks:
 
 - Policy for a "suspicious" verdict: configurable with `scan.suspicious`, `block` (default) or `warn`.
 - Policy for files that could not be fully scanned (engine error or timeout, limits): configurable with `scan.on_error`. `block` (default) reports the device as not verified; unscanned files are listed but never removed, since they are not known to be malicious.
-- A Hashlookup hit means "known file", not "benign file": content engines are skipped for known files by default (`engines.hashlookup.skip_content_engines`), a malicious hash always wins, and the decision is recorded in the scan report.
+- A Hashlookup hit means "known file", not "benign file": content engines also scan known files by default (the CIRCL filter lists the EICAR test file, tools and malware; `engines.hashlookup.skip_content_engines` skips them, opt-in), a malicious hash always wins, and the decision is recorded in the scan report.
 - YARA Forge already includes signature-base: only YARA Forge `core` is configured by default, signature-base is opt-in.
 
 ## Contributing

@@ -119,8 +119,10 @@ class MalwareBazaarConfig:
 class HashlookupConfig:
     enabled: bool = True
     bloom: Path = SIGNATURES_DIR / "hashlookup" / "hashlookup-full.bloom"
-    # Do not run the content engines (ClamAV, YARA) on known files
-    skip_content_engines: bool = True
+    # Do not run the content engines (ClamAV, YARA) on known files. Off by
+    # default: known is not benign (the EICAR test file, tools, malware are
+    # in the CIRCL filter), it only saves time on devices full of software
+    skip_content_engines: bool = False
     # The CIRCL Bloom filter is updated monthly
     max_age_days: float | None = 45.0
 
@@ -450,7 +452,9 @@ def _parse_engines(engines: dict[str, Any]) -> EnginesConfig:
     hl_cfg = HashlookupConfig(
         enabled=_get(hl, section, "enabled", bool, True),
         bloom=_path(hl, section, "bloom", HashlookupConfig.bloom),
-        skip_content_engines=_get(hl, section, "skip_content_engines", bool, True),
+        skip_content_engines=_get(
+            hl, section, "skip_content_engines", bool, HashlookupConfig.skip_content_engines
+        ),
         max_age_days=_optional_positive(hl, section, "max_age_days", HashlookupConfig.max_age_days),
     )
 

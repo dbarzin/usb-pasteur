@@ -221,6 +221,15 @@ class ContentEngine(Engine):
         return EngineResult(self.name, Verdict.CLEAN)
 
 
+class DetectingEngine(Engine):
+    """A content engine that detects everything (EICAR for ClamAV)."""
+
+    name = "content"
+
+    def scan(self, file: FileInfo) -> EngineResult:
+        return EngineResult(self.name, Verdict.MALICIOUS, ("Eicar-Signature",))
+
+
 @pytest.fixture
 def engines(mb_database: Path, bloom_path: Path) -> list[Engine]:
     mb = MalwareBazaarEngine(mb_database)
@@ -235,22 +244,29 @@ def verdicts(results: list[EngineResult]) -> dict[str, Verdict]:
     return {r.engine: r.verdict for r in results}
 
 
-def test_known_file_skips_content_engines(engines: list[Engine]) -> None:
+def test_known_file_is_scanned_by_default(engines: list[Engine]) -> None:
     results = run_engines(info(KNOWN), engines, PipelineOptions())
+    assert verdicts(results)["content"] is Verdict.CLEAN
+
+
+def test_known_malicious_file_is_detected(engines: list[Engine]) -> None:
+    # The EICAR test file is in the CIRCL filter: known is not benign
+    engines = [DetectingEngine(), *engines[1:]]
+    results = run_engines(info(KNOWN), engines, PipelineOptions())
+    assert verdicts(results)["content"] is Verdict.MALICIOUS
+
+
+def test_known_file_skips_content_engines_when_enabled(engines: list[Engine]) -> None:
+    options = PipelineOptions(skip_content_for_known=True)
+    results = run_engines(info(KNOWN), engines, options)
     assert [r.engine for r in results] == ["hashlookup", "malwarebazaar", "content"]
     assert results[2].verdict is Verdict.SKIPPED
     assert results[2].reason == KNOWN_FILE
 
 
-def test_skip_can_be_disabled(engines: list[Engine]) -> None:
-    options = PipelineOptions(skip_content_for_known=False)
-    results = run_engines(info(KNOWN), engines, options)
-    assert verdicts(results)["content"] is Verdict.CLEAN
-
-
 def test_malicious_hash_wins_over_known(engines: list[Engine]) -> None:
     # MALWARE is in both the Bloom filter and MalwareBazaar
-    results = run_engines(info(MALWARE), engines, PipelineOptions())
+    results = run_engines(info(MALWARE), engines, PipelineOptions(skip_content_for_known=True))
     assert verdicts(results) == {
         "hashlookup": Verdict.CLEAN,
         "malwarebazaar": Verdict.MALICIOUS,

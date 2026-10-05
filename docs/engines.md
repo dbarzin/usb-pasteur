@@ -89,17 +89,16 @@ filter of known files (NSRL, Linux distributions, software repositories).
 - **False positives**: a Bloom filter answers "known" for some unknown files.
   The CIRCL filter is built for a probability of 1 in 10,000. The probability
   is recorded with each answer (`fp_rate`) in the scan report.
-- **Skipping the content engines**: with
-  `[engines.hashlookup] skip_content_engines = true` (default), ClamAV and
-  YARA-X do not scan known files, which saves a lot of time on devices full of
-  common software. The hash engines always run, and **a MalwareBazaar match
-  always wins**: content engines still run on a known file that a hash engine
-  reports. The skipped engines appear in the report with the reason
+- **Content engines on known files**: by default, ClamAV and YARA-X scan
+  every file, known or not. The CIRCL filter lists the files it has seen,
+  among them the EICAR test file, offensive tools and malware samples: a
+  kiosk that skipped them reported EICAR clean.
+  `[engines.hashlookup] skip_content_engines = true` skips the content
+  engines on known files, which saves time on devices full of common
+  software, at that cost. The hash engines always run, and **a MalwareBazaar
+  match always wins**: content engines still run on a known file that a hash
+  engine reports. The skipped engines appear in the report with the reason
   `known file (hashlookup)`, so the decision is auditable.
-
-  The residual risk: an unknown malicious file that is a Bloom filter false
-  positive (about 1 in 10,000) is not scanned by the content engines. Set
-  `skip_content_engines = false` to scan every file with every engine.
 
 ### ClamAV
 
