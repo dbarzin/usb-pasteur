@@ -132,7 +132,8 @@ def test_fake_scan_banner(
     # The versions first, then the banner
     assert display.messages[0] == f"USB-Pasteur {__version__} (development)"
     assert display.messages[1] == "Signatures: none installed"
-    assert display.messages[2].startswith("FAKE SCAN MODE")
+    assert display.messages[2] == "Engines: fake (fake)"
+    assert display.messages[3].startswith("FAKE SCAN MODE")
 
 
 def test_no_engine_without_fake_scan() -> None:
@@ -319,7 +320,7 @@ def test_auto_mount(
     watcher = SystemMountWatcher(["vfat"], mounts=mounts)
     source = ListSource([DeviceEvent(Action.ADD, UsbDevice(str(node), "vfat", "KEY"))])
     Kiosk(config, display, source, pool, watcher).run()
-    assert display.messages[3].startswith("AUTO-MOUNT MODE")
+    assert display.messages[4].startswith("AUTO-MOUNT MODE")
     assert not (usb_tree / "docs" / "eicar.com").exists()
     assert "Device cleaned! You can remove the device." in display.messages
     # Unmounted before the confirmation, mounted again to clean, unmounted, ejected
@@ -416,3 +417,21 @@ def test_device_removed_is_not_ejected(
     make_kiosk(config, display, mounter, [DeviceEvent(Action.ADD, DEVICE)], pool).run()
     assert "Device removed before cleaning: NOT CLEANED" in display.messages
     assert mounter.ejected == []
+
+
+def test_describe_engines() -> None:
+    from usb_pasteur.engines import EngineKind
+    from usb_pasteur.kiosk import describe_engines
+    from usb_pasteur.workers import EngineInfo
+
+    engines = [
+        EngineInfo("malwarebazaar", EngineKind.HASH, "1", 10.0),
+        EngineInfo("hashlookup", EngineKind.HASH, "DCSO bloom v1", 10.0),
+        EngineInfo("clamav", EngineKind.CONTENT, "ClamAV 1.4.3", 60.0),
+        EngineInfo("yara", EngineKind.CONTENT, "YARA-X 1.21.0", 60.0),
+        EngineInfo("heuristics", EngineKind.CONTENT, "1", 60.0),
+    ]
+    assert describe_engines(engines) == (
+        "malwarebazaar, hashlookup, clamav (ClamAV 1.4.3), yara (YARA-X 1.21.0), heuristics"
+    )
+    assert describe_engines([]) == "none loaded (no valid signatures)"

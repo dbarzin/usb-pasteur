@@ -12,7 +12,7 @@ from pathlib import Path
 from usb_pasteur import __version__, imageupdate, maintenance
 from usb_pasteur.config import Config
 from usb_pasteur.device import DeviceError, Mounter, SystemMountWatcher, UsbDevice
-from usb_pasteur.engines import Engine, EngineError
+from usb_pasteur.engines import Engine, EngineError, EngineKind
 from usb_pasteur.engines.registry import NoEngineError, engine_specs, load_engines
 from usb_pasteur.hashing import hash_fd
 from usb_pasteur.imageupdate import UPDATE_FOLDER as IMAGE_FOLDER
@@ -305,6 +305,7 @@ class Kiosk:
             self.display.message(
                 f"Signatures: set {installed.serial} of {created:%Y-%m-%d %H:%M} UTC"
             )
+        self.display.message(f"Engines: {describe_engines(self.scanner.engines)}")
         if self.config.kiosk.fake_scan:
             self.display.message("FAKE SCAN MODE - for development only, no real detection")
         if self.config.device.auto_mount:
@@ -746,6 +747,20 @@ class Kiosk:
             self.mounter.unmount()
         except DeviceError as ex:
             log_event(logger, "unmount_failed", logging.ERROR, error=str(ex))
+
+
+def describe_engines(engines: list[EngineInfo]) -> str:
+    """The enabled engines, with the version of the scanning programs (ClamAV, YARA-X)."""
+    if not engines:
+        return "none loaded (no valid signatures)"
+    names = []
+    for engine in engines:
+        # The version of a hash engine is the format of its database
+        version = engine.version if engine.kind is EngineKind.CONTENT else ""
+        names.append(
+            f"{engine.name} ({version})" if version and not version.isdigit() else engine.name
+        )
+    return ", ".join(names)
 
 
 def _build_date(version: int) -> str:
