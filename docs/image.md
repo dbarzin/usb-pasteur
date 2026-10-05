@@ -164,10 +164,25 @@ A kiosk must only use USB storage devices: a key that is also a keyboard
   adapters and modems, plus the staging drivers and batman-adv, which would
   bring the wireless modules back as dependencies. Such devices have no
   driver even if they were authorized.
-- **USB HID is kept**: the touchscreen of the kiosk is a USB HID device. It
-  will be allowed by its own USBGuard rule once the reference hardware is
-  chosen; until then, every keyboard, mouse and touchscreen is blocked. The
-  virtual machines are not affected: their keyboard is not a USB device.
+- **USB HID is kept for the touchscreen** of the reference hardware, a
+  Waveshare 7-inch HDMI LCD (C), allowed by its own rule:
+
+  ```
+  allow id 0eef:0005 serial "220211" name "WS170120" with-interface 03:00:00 via-port "1-8"
+  ```
+
+  its USB touch controller (eGalax) with its single generic HID interface (a
+  keyboard has `03:01:01`), on the internal port of the enclosure, this unit
+  only. A device that copies its identifiers on another port, or that adds a
+  keyboard interface, is blocked; so is every keyboard and mouse. Another
+  unit or port: adapt the rule to the line the audit log shows when it is
+  blocked. The kernel (`mousedev`) turns a touch into a left click on
+  `/dev/input/mice`, which the kiosk reads to confirm a cleaning.
+
+  The test image allows the touch tablet of the virtual machine (QEMU
+  `usb-tablet`, same interface) in its own rule
+  (`/etc/usbguard/rules.d/50-vm-test.conf`): the test confirms a cleaning
+  with a touch. The keyboard of the virtual machines is not a USB device.
 
 ## System hardening
 

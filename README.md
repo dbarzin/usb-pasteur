@@ -226,7 +226,7 @@ Tasks:
 - [x] `nftables` firewall: deny all by default
 - [x] **USBGuard**: only mass-storage devices (and hubs) are allowed (BadUSB protection), no device is authorized before USBGuard starts (`usbcore.authorized_default=0`)
 - [x] No USB network, wireless, Bluetooth, USB serial and modem drivers in the image; USB HID is kept for the touchscreen, keyboards and mice are blocked by USBGuard
-- [ ] USBGuard rule allowing the touchscreen of the reference hardware
+- [x] USBGuard rule allowing the touchscreen of the reference hardware (Waveshare `0eef:0005`, its serial, HID interface only, internal port), touch tested in the virtual machine
 - [x] No boot loader menu: systemd-boot does not read the keyboard (a keyboard works in the firmware, before USBGuard starts)
 - [x] Devices mounted with `ro,noexec,nosuid,nodev` by the kiosk, no automount (no udisks in the image)
 - [x] Limited set of supported filesystems (vfat, exfat, ntfs3, ext4): the kiosk refuses to mount any other

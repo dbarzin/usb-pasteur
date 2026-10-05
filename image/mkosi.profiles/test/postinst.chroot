@@ -14,6 +14,9 @@ usb-pasteur-signatures build "$SET" --serial 1 --key "$SRCDIR/usb-pasteur/image/
 usb-pasteur-signatures install "$SET"
 rm -r "$SET"
 
+# USBGuard reads its rule files only when root alone can
+chmod 0600 /etc/usbguard/rules.d/50-vm-test.conf
+
 # Canary of the dm-verity test
 "$PYTHON" "$CORPUS" canary /usr/share/usb-pasteur/verity-canary
 

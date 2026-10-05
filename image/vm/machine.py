@@ -429,6 +429,19 @@ class Machine:
         """Press a key on the kiosk screen (active virtual terminal)."""
         self.monitor.execute("send-key", keys=[{"type": "qcode", "data": qcode}])
 
+    def touch(self) -> None:
+        """Touch the middle of the screen with the touch tablet (usb-tablet)."""
+        for down in (True, False):
+            self.monitor.execute(
+                "input-send-event",
+                events=[
+                    {"type": "abs", "data": {"axis": "x", "value": 0x4000}},
+                    {"type": "abs", "data": {"axis": "y", "value": 0x4000}},
+                    {"type": "btn", "data": {"down": down, "button": "left"}},
+                ],
+            )
+            time.sleep(0.1)
+
 
 def run_interactive(
     image: Path, workdir: Path, usb_host: Sequence[str] = (), vnc_listen: str = VNC_LISTEN

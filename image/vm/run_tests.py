@@ -265,6 +265,9 @@ def check_usb_policy(vm: Machine) -> None:
     ):  # fmt: skip
         check(not vm.shell.succeeds(f"modinfo {module}"), f"kernel module {module} is present")
     check(vm.shell.succeeds("modinfo usb-storage"), "kernel module usb-storage is missing")
+    # The rule of the touchscreen of the reference hardware is loaded
+    rules = vm.shell.run("usbguard list-rules")
+    check('id 0eef:0005 serial "220211"' in rules, f"no touchscreen rule:\n{rules}")
     interfaces = vm.shell.run("ls /sys/class/net").split()
 
     for driver, product in (("usb-kbd", "Keyboard"), ("usb-net", "Network")):
@@ -753,6 +756,20 @@ def wait_kept(vm: Machine, version: str) -> tuple[str, list[str], list[str]]:
         time.sleep(2)
 
 
+def plug_touchscreen(vm: Machine) -> None:
+    """The touch tablet of the machine, allowed by the rule of the test profile."""
+    step("touchscreen: allowed by its USBGuard rule")
+    vm.add_usb_device("usb-tablet", "touch")
+    deadline = time.monotonic() + 30
+    while True:
+        found = {n: flag for n, flag in usb_devices(vm).items() if "Tablet" in n}
+        if found and set(found.values()) == {"1"}:
+            break
+        check(time.monotonic() < deadline, f"touch tablet not authorized: {found}")
+        time.sleep(0.5)
+    print(f"{next(iter(found))}: allowed")
+
+
 def check_infected_key(vm: Machine, key: Path) -> None:
     step("insert the infected key")
     vm.insert_key(key)
@@ -760,15 +777,15 @@ def check_infected_key(vm: Machine, key: Path) -> None:
     expected = {path for path, (_, engine) in corpus.KEY.items() if engine}
     check(infected["count"] == len(expected), f"infected files: {infected['count']}")
 
-    step("confirm the cleaning on the kiosk screen")
+    step("confirm the cleaning with a touch on the kiosk screen")
     # The screen must still show the scan while the kiosk waits for a key
     time.sleep(1.0)
     screen = wait_screen(vm, "PRESS A KEY OR TOUCH THE SCREEN TO CLEAN")
     for path in expected:
         check(path in screen, f"{path} not listed on the kiosk screen\n{screen}")
-    # A key pressed before the kiosk waits for it may be discarded: press
-    # again until the cleaning is done
-    cleaned = wait_event(vm, "device_cleaned", action=vm.press_key, timeout=60)
+    # A touch before the kiosk waits for it may be discarded: touch again
+    # until the cleaning is done (the other keys are confirmed with the keyboard)
+    cleaned = wait_event(vm, "device_cleaned", action=vm.touch, timeout=60)
     check(cleaned["removed"] == len(expected), f"removed files: {cleaned['removed']}")
     wait_event(vm, "device_ejected")
     wait_screen(vm, "Device cleaned! You can remove the device.")
@@ -984,6 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_sandbox(vm)
                 check_integrity(vm)
                 check_filesystems(vm)
+                plug_touchscreen(vm)
                 check_infected_key(vm, key)
                 check_clean_key(vm, key)
                 check_filesystem_keys(vm, workdir)
