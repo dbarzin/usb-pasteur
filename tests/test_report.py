@@ -150,7 +150,7 @@ def test_report_records_known_files_and_errors(tmp_path: Path, config: Config) -
         ),
     ]
     now = datetime.now(UTC)
-    report = build_report(config, DEVICE, DeviceUsage(100, 50), engines, summary, now, now)
+    report = build_report(config, DEVICE, DeviceUsage(100, 50), engines, summary, now, now, 2)
     path = write_report(report, tmp_path / "reports")
     data = json.loads(path.read_text())
     validate(data)
@@ -167,7 +167,7 @@ def test_report_records_known_files_and_errors(tmp_path: Path, config: Config) -
 
 def test_invalid_report_is_rejected(config: Config) -> None:
     now = datetime.now(UTC)
-    report = build_report(config, DEVICE, DeviceUsage(), [], ScanSummary(), now, now)
+    report = build_report(config, DEVICE, DeviceUsage(), [], ScanSummary(), now, now, 2)
     report.data["verdict"]["device"] = "probably fine"
     with pytest.raises(jsonschema.ValidationError):
         validate(report.data)

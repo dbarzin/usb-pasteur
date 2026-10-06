@@ -562,6 +562,7 @@ class Kiosk:
             s,
             started,
             datetime.now(UTC),
+            self.scanner.pool.size,
         )
         self.actions = Actions()
         self._save_report()

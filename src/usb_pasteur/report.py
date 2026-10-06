@@ -73,7 +73,9 @@ def build_report(
     summary: ScanSummary,
     started: datetime,
     finished: datetime,
+    workers: int,
 ) -> ScanReport:
+    """workers: files scanned at the same time (scan.workers once resolved)."""
     files = sorted(summary.files, key=lambda f: f.rel_path)
     by_verdict: dict[str, int] = {}
     for f in files:
@@ -86,7 +88,7 @@ def build_report(
         "finished": _iso(finished),
         "duration": round(summary.duration, 3),
         "device": _device(device, usage),
-        "configuration": _configuration(config),
+        "configuration": _configuration(config, workers),
         "engines": [_engine(e) for e in engines],
         "files": [_file(f) for f in files],
         "verdict": {
@@ -149,11 +151,11 @@ def _device(device: UsbDevice | None, usage: DeviceUsage) -> dict[str, Any]:
     }
 
 
-def _configuration(config: Config) -> dict[str, Any]:
+def _configuration(config: Config, workers: int) -> dict[str, Any]:
     return {
         "fake_scan": config.kiosk.fake_scan,
         "scan": {
-            "workers": config.scan.workers,
+            "workers": workers,
             "file_timeout": config.scan.file_timeout,
             "suspicious": config.scan.suspicious,
             "on_error": config.scan.on_error,
