@@ -23,8 +23,7 @@ a 165 x 100 mm screen: a 14 mm band at the top and at the bottom of the
 window leaves a 100 mm high opening. Each band has two 3 mm holes to screw
 the screen from behind, 157.5 mm apart across the face and 115 mm apart
 along the slope. Its right wall, seen from the front, is 2 mm thick instead
-of 5 mm behind the screen and has an 88 x 14 mm opening just behind the
-screen, for the HDMI and USB plugs.
+of 5 mm behind the screen, to leave room for the HDMI and USB cables.
 
 The base of both models has three 3.8 mm holes to screw it on the VESA
 mounting bracket of the Lenovo ThinkCentre Tiny (M720), 8.5 mm from the side
